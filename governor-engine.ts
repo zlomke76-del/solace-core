@@ -4,7 +4,7 @@
 
 import { parseSignals } from "./signal-parser";
 import { computeTransition } from "./transitions";
-import { getGovernorState, setGovernorLevel } from "./governor-state";
+import { getGovernorState, setGovernorLevel } from "./state";
 import { GovernorExtras, PacingLevel } from "./types";
 
 // Simple, stable, minimal icon pack
