@@ -1,31 +1,26 @@
 // --------------------------------------------------------------
-// Governor Types (ASCII-safe)
-// Solace Behavioral Governor — Core Type Definitions
+// Governor Types (FINAL VERSION)
+// Defines the data returned by the pacing engine.
 // --------------------------------------------------------------
 
-export type GovernorSignals = {
-  pace: number;            // Pace Signal (PS)
-  cognitiveLoad: number;   // Cognitive Load Signal (CLS)
-  intentClarity: number;   // Intent Clarity Signal (ICS)
-  emotionalValence: number;// Emotional Valence Signal (EVS)
-  sessionContext: number;  // Session Context Signal (SCS)
-  momentum: number;        // Momentum Signal (MS)
-};
+export interface GovernorSignals {
+  // All raw behavioral signals parsed from the message
+  pace?: number;
+  cognitiveLoad?: number;
+  intentClarity?: number;
+  emotionalValence?: number;
 
-export type GovernorLevel =
-  0 | 1 | 2 | 3 | 4 | 5;
+  // High-level interpretation signals
+  emotionalDistress?: boolean;
+  decisionContext?: boolean;
+  momentumLow?: boolean;
 
-export type GovernorState = {
-  level: GovernorLevel;
-  lastUpdated: number;
-};
+  // Any additional internal signal the engine may produce
+  [key: string]: any;
+}
 
-export type GovernorTransitionResult = {
-  nextLevel: GovernorLevel;
-  reason: string;
-};
-
-export type GovernorExtras = {
-  level: GovernorLevel;
-  instructions: string; // A+ format
-};
+export interface GovernorExtras {
+  level: number;            // Governor pacing level 0–5
+  instructions: string;     // A+ instruction block injected into hybrid pipeline
+  signals: GovernorSignals; // Parsed signals used by formatting & diagnostics
+}
