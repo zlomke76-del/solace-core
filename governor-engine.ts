@@ -1,11 +1,12 @@
 // --------------------------------------------------------------
-// Governor Engine v2.0 (ASCII-safe)
+// Governor Engine v2.1 (ASCII-safe, compile-stable)
 // Integrates Pacing Engine + Icon Pack (SIP)
-// Generates GovernorExtras for the hybrid pipeline
+// Generates GovernorExtras for the hybrid pipeline.
 //
 // OUTPUT:
 //  - level (0–5)
 //  - instructions (icon-aware, pacing-aware)
+//  - signals (all parsed behavioral indicators)
 // --------------------------------------------------------------
 
 import { parseSignals } from "./signal-parser";
@@ -22,7 +23,7 @@ import {
 } from "@/lib/solace/icon-pack";
 
 // --------------------------------------------------------------
-// Build governor instruction block with icon formatting
+// Build governor instruction block (icons + pacing)
 // --------------------------------------------------------------
 function buildInstructions(
   level: number,
@@ -32,13 +33,15 @@ function buildInstructions(
 ): string {
   let out = `GOVERNOR_LEVEL: ${level}. Adjust tone, structure, and cadence accordingly.`;
 
-  // No icons in Level 0 (Sanctuary)
+  // Level 0: no icons, sanctuary mode
   if (level === 0) return out;
 
   let usage = 0;
   const icons = getIconsForLevel(level as any, isFounder);
 
+  // ------------------------------
   // Emotional grounding → Anchor
+  // ------------------------------
   if (
     signals.emotionalDistress &&
     shouldUseIcon(level as any, usage) &&
@@ -51,11 +54,14 @@ function buildInstructions(
     }
   }
 
-  // Decision-making context → Compass
+  // ------------------------------
+  // Decision context → Compass
+  // (FIX: correct field name: decisionContext)
+  // ------------------------------
   if (
-    signals.decisionPoint &&
+    signals.decisionContext &&
     shouldUseIcon(level as any, usage) &&
-    canUseCompass(level as any, isFounder, signals.decisionPoint)
+    canUseCompass(level as any, isFounder, signals.decisionContext)
   ) {
     const compass =
       selectIcon(level as any, "COMPASS", isFounder) ||
@@ -67,7 +73,9 @@ function buildInstructions(
     }
   }
 
-  // Structural clarity icons (Level 2+)
+  // ------------------------------
+  // Structural icons (Levels 2–5)
+  // ------------------------------
   if (level >= 2 && shouldUseIcon(level as any, usage)) {
     let structural = "";
 
@@ -85,25 +93,25 @@ function buildInstructions(
 }
 
 // --------------------------------------------------------------
-// MAIN GOVERNOR UPDATE
+// MAIN GOVERNOR UPDATE (FINAL)
 // --------------------------------------------------------------
 export function updateGovernor(
   message: string,
   isFounder: boolean = false
 ): GovernorExtras {
-  // 1. Previous level
+  // 1. previous level
   const prev = getGovernorState().level;
 
-  // 2. Parse message for signals (pace, load, emotion, intent, etc.)
+  // 2. parse behavioral signals
   const signals = parseSignals(message);
 
-  // 3. Compute pacing transition
+  // 3. compute transition
   const { nextLevel } = computeTransition(prev, signals, message);
 
-  // 4. Save governor state
+  // 4. persist pacing state
   setGovernorLevel(nextLevel);
 
-  // 5. Build pacing + icon-aware instructions
+  // 5. build pacing + icon instructions
   const instructions = buildInstructions(
     nextLevel,
     message,
@@ -111,10 +119,10 @@ export function updateGovernor(
     isFounder
   );
 
-  // 6. Return final governor extras
+  // 6. return the FULL GovernorExtras object (FIXED)
   return {
     level: nextLevel,
-    instructions
+    instructions,
+    signals        // <-- REQUIRED by hybrid, adapter, and route.ts
   };
 }
-
