@@ -17,3 +17,4 @@ export function setGovernorLevel(level: number) {
   const safe = Math.max(0, Math.min(5, level));
   _state.level = safe as PacingLevel;
 }
+
