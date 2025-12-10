@@ -1,40 +1,28 @@
 // --------------------------------------------------------------
-// Governor State Manager (ASCII-safe)
-// Maintains Solace's current pacing level across requests.
-// In production you may replace this with Redis or KV storage.
+// Governor State Store (In-memory, per server instance)
 // --------------------------------------------------------------
 
-import { GovernorState, GovernorLevel } from "./types";
+import { GovernorState, PacingLevel } from "./types";
 
-// Simple in-memory store (per server instance)
+// Default governor state
 let _state: GovernorState = {
-  level: 3,         // Default = productive flow
+  level: 3,               // Start in productive flow
   lastUpdated: Date.now()
 };
 
 // --------------------------------------------------------------
-// Get current governor state
+// Accessor
 // --------------------------------------------------------------
 export function getGovernorState(): GovernorState {
   return _state;
 }
 
 // --------------------------------------------------------------
-// Set new governor level
+// Mutator
 // --------------------------------------------------------------
-export function setGovernorLevel(level: GovernorLevel) {
+export function setGovernorLevel(level: PacingLevel) {
   _state = {
     level,
-    lastUpdated: Date.now()
-  };
-}
-
-// --------------------------------------------------------------
-// Reset governor state (useful for debugging or new sessions)
-// --------------------------------------------------------------
-export function resetGovernor() {
-  _state = {
-    level: 3,
     lastUpdated: Date.now()
   };
 }
