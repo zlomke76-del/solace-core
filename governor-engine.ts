@@ -17,28 +17,46 @@ const ICONS = {
   STAR: "★"
 };
 
+/**
+ * Build governor instructions WITHOUT exposing:
+ * - level numbers
+ * - internal state
+ * - “Governor” wording
+ *
+ * Only behavioral cues + optional icons based on signals.
+ */
 function buildInstructions(level: PacingLevel, signals: any): string {
-  let out = `GOVERNOR_LEVEL: ${level}. Adjust tone, structure, and cadence accordingly.`;
+  let parts: string[] = [];
 
-  // Emotional support → anchor
+  // Emotional stabilizer
   if (signals.fatigue > 0.6) {
-    out = `${ICONS.ANCHOR} ${out}`;
+    parts.push(`${ICONS.ANCHOR} Steady the pace and keep tone grounded.`);
   }
 
-  // Decision → compass
+  // Decision point
   if (signals.decisionPoint) {
-    out = `${ICONS.COMPASS} ${out}`;
+    parts.push(`${ICONS.COMPASS} Highlight choices and clarify tradeoffs.`);
   }
 
-  // Structural pacing
-  if (level >= 2 && level <= 4) {
-    out = `${ICONS.ARROW} ${out}`;
+  // Pacing logic (0–5 mapped silently)
+  if (level <= 1) {
+    parts.push(`Keep responses gentle, simple, and patient.`);
   }
-  if (level === 5) {
-    out = `${ICONS.STAR} ${out}`;
+  else if (level === 2) {
+    parts.push(`${ICONS.ARROW} Keep structure light and supportive.`);
+  }
+  else if (level === 3) {
+    parts.push(`${ICONS.ARROW} Maintain balanced pace and clarity.`);
+  }
+  else if (level === 4) {
+    parts.push(`${ICONS.DOUBLE_ARROW} Increase focus and tighten structure.`);
+  }
+  else if (level >= 5) {
+    parts.push(`${ICONS.STAR} Move decisively with crisp, efficient guidance.`);
   }
 
-  return out;
+  // Join into one instruction block
+  return parts.join(" ");
 }
 
 // --------------------------------------------------------------
