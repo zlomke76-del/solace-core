@@ -4,6 +4,10 @@
 
 // Governor pacing levels: 0–5
 export type GovernorLevel = 0 | 1 | 2 | 3 | 4 | 5;
+export interface GovernorState {
+  level: GovernorLevel;
+  lastUpdated: number;
+}
 
 // Internal governor runtime state
 export interface GovernorState {
