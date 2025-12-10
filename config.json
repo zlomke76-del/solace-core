@@ -1,0 +1,22 @@
+{
+  "signalWeights": {
+    "pace": 1.0,
+    "cognitiveLoad": 1.2,
+    "intentClarity": 1.0,
+    "emotionalValence": 1.0,
+    "sessionContext": 0.5,
+    "momentum": 1.0
+  },
+  "thresholds": {
+    "overwhelm": 0.7,
+    "highPace": 0.7,
+    "lowMomentum": 0.3
+  },
+  "rules": {
+    "maxStep": 1,
+    "distressOverride": true,
+    "overloadSimplify": true,
+    "momentumStructure": true,
+    "userPushOverride": true
+  }
+}
