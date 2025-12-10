@@ -1,128 +1,85 @@
 // --------------------------------------------------------------
-// Governor Signal Parser (ASCII-safe)
-// Computes the 6 core signals that determine Solace pacing.
+// Signal Parser (v2) — aligned with GovernorSignals
 // --------------------------------------------------------------
 
 import { GovernorSignals } from "./types";
 
-// Utility: normalize to 0–1
-function clamp01(n: number): number {
-  if (n < 0) return 0;
-  if (n > 1) return 1;
-  return n;
+// --------------------------------------------------------------
+// Utility scoring helpers
+// --------------------------------------------------------------
+function containsAny(str: string, arr: string[]): boolean {
+  const lower = str.toLowerCase();
+  return arr.some(x => lower.includes(x));
+}
+
+function scoreRange(value: number, min: number, max: number): number {
+  if (value <= min) return 0;
+  if (value >= max) return 1;
+  return (value - min) / (max - min);
 }
 
 // --------------------------------------------------------------
-// 1. Pace Signal (PS)
-// Measures how fast the user is thinking.
+// Individual signal extractors
 // --------------------------------------------------------------
-function computePace(message: string): number {
-  if (!message) return 0;
 
-  const lengthFactor = Math.min(message.length / 400, 1); // long = fast thinking
-  const densityFactor = message.split(" ").length > 50 ? 1 : 0;
-
-  const urgencyWords = ["go", "fast", "move", "now", "hurry", "execute", "shit", "done"];
-  const urgencyFactor = urgencyWords.some(w => message.toLowerCase().includes(w)) ? 1 : 0;
-
-  return clamp01((lengthFactor * 0.4) + (densityFactor * 0.3) + (urgencyFactor * 0.3));
-}
-
-// --------------------------------------------------------------
-// 2. Cognitive Load Signal (CLS)
-// Hesitation, confusion, frustration.
-// --------------------------------------------------------------
+// Cognitive load = length + complexity
 function computeCognitiveLoad(message: string): number {
-  if (!message) return 0;
+  const len = message.length;
+  const punctuation = (message.match(/[.,;:!?]/g) || []).length;
 
-  const hesitationWords = ["I dont know", "wait", "hold on", "not sure", "confused"];
-  const frustrationWords = ["fuck", "tired", "broken", "overwhelm", "stuck"];
-
-  const hes = hesitationWords.some(w => message.toLowerCase().includes(w.toLowerCase()));
-  const fru = frustrationWords.some(w => message.toLowerCase().includes(w.toLowerCase()));
-
-  const clarityDrop = message.endsWith("?") ? 0.5 : 0;
-
-  return clamp01((hes ? 0.4 : 0) + (fru ? 0.4 : 0) + clarityDrop);
+  // Blend length + punctuation density
+  return Math.min(1, (len / 400) * 0.6 + (punctuation / 20) * 0.4);
 }
 
-// --------------------------------------------------------------
-// 3. Intent Clarity Signal (ICS)
-// Is user direction clear?
-// --------------------------------------------------------------
+// Intent clarity = directness of asks or commands
 function computeIntentClarity(message: string): number {
-  if (!message) return 0;
-
-  const clearIntentWords = ["do this", "make this", "write", "fix", "build", "generate"];
-  const hasClearIntent = clearIntentWords.some(w => message.toLowerCase().includes(w));
-
-  const questions = (message.match(/\?/g) || []).length;
-
-  if (hasClearIntent) return 1;
-  if (questions > 2) return 0.2;
-
-  return clamp01(hasClearIntent ? 1 : 0.3);
+  const directives = ["do this", "fix", "send", "now", "why", "how", "what"];
+  const hasDirective = containsAny(message, directives);
+  return hasDirective ? 1 : 0.3;
 }
 
-// --------------------------------------------------------------
-// 4. Emotional Valence Signal (EVS)
-// Positive = high, Neutral = 0.5, Negative = low.
-// --------------------------------------------------------------
+// Emotional valence = negative sentiment heuristic
 function computeEmotionalValence(message: string): number {
-  if (!message) return 0.5;
+  const negativeWords = ["tired", "upset", "angry", "annoyed", "frustrated"];
+  const positiveWords = ["great", "good", "love", "nice", "amazing"];
 
-  const negativeWords = ["sad", "angry", "tired", "fuck", "upset", "broken"];
-  const positiveWords = ["good", "great", "perfect", "nice", "love"];
+  let score = 0.5;
 
-  const neg = negativeWords.some(w => message.toLowerCase().includes(w));
-  const pos = positiveWords.some(w => message.toLowerCase().includes(w));
+  if (containsAny(message, negativeWords)) score -= 0.3;
+  if (containsAny(message, positiveWords)) score += 0.3;
 
-  if (neg) return 0.1;
-  if (pos) return 0.8;
+  return Math.max(0, Math.min(1, score));
+}
 
-  return 0.5;
+// Fatigue = repeated "again", "still", "why", "stuck"
+function computeFatigue(message: string): number {
+  const fatigueWords = ["again", "still", "why", "nothing", "stuck"];
+  return containsAny(message, fatigueWords) ? 0.7 : 0.1;
+}
+
+// Decision point = major transition moment
+function computeDecisionPoint(message: string): boolean {
+  const triggers = [
+    "next step",
+    "what now",
+    "do we continue",
+    "switch",
+    "change direction",
+    "move forward",
+    "should we"
+  ];
+  return containsAny(message, triggers);
 }
 
 // --------------------------------------------------------------
-// 5. Session Context Signal (SCS)
-// Simplified: morning/slow vs work/focused.
-// (Can be expanded with device signals, session history, etc.)
-// --------------------------------------------------------------
-function computeSessionContext(): number {
-  const hour = new Date().getHours();
-
-  if (hour < 6) return 0.2;   // quiet hours
-  if (hour < 12) return 0.4;  // morning warm-up
-  if (hour < 18) return 0.7;  // work hours
-  return 0.5;                 // evening
-}
-
-// --------------------------------------------------------------
-// 6. Momentum Signal (MS)
-// Based on repeated pivots or stuck patterns.
-// For now, message-level model only.
-// --------------------------------------------------------------
-function computeMomentum(message: string): number {
-  if (!message) return 0.5;
-
-  const stuckWords = ["stuck", "again", "still", "loop"];
-  const stuck = stuckWords.some(w => message.toLowerCase().includes(w));
-
-  if (stuck) return 0.2;
-
-  return 0.7;
-}
-
-// --------------------------------------------------------------
-// MAIN EXPORT: compute all signals
+// MAIN SIGNAL PARSER (v2)
 // --------------------------------------------------------------
 export function parseSignals(message: string): GovernorSignals {
   return {
-    pace: computePace(message),
     cognitiveLoad: computeCognitiveLoad(message),
     intentClarity: computeIntentClarity(message),
     emotionalValence: computeEmotionalValence(message),
-    sessionContext: computeSessionContext(),
-    momentum: computeMomentum(message),
+    fatigue: computeFatigue(message),
+    decisionPoint: computeDecisionPoint(message)
   };
 }
