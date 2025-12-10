@@ -1,5 +1,5 @@
 // --------------------------------------------------------------
-// Governor In-Memory State
+// Governor In-Memory State (Minimal Stable Version)
 // --------------------------------------------------------------
 
 import { GovernorState, PacingLevel } from "./types";
