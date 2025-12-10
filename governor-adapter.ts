@@ -12,9 +12,8 @@ import { updateGovernor } from "./governor-engine";
 const EMPTY_SIGNALS: GovernorSignals = {
   emotionalValence: 0.5,   // neutral midpoint
   intentClarity: 0.5,      // neutral midpoint
-  fatigue: 0,              // none detected
-  urgency: 0,              // no urgency
-  decisionPoint: false     // not a decision scenario
+  fatigue: 0,              // no fatigue inferred
+  decisionPoint: false     // no decision context inferred
 };
 
 // --------------------------------------------------------------
@@ -46,12 +45,9 @@ export function applyGovernor(message: string): GovernorExtras {
 
     return {
       level: typeof gov.level === "number" ? gov.level : 3,
+      instructions: sanitizeASCII(gov.instructions || "GOVERNOR_LEVEL: 3"),
 
-      instructions: sanitizeASCII(
-        gov.instructions || "GOVERNOR_LEVEL: 3"
-      ),
-
-      // GovernorSignals must match exact shape
+      // Must match EXACT SIGNAL SHAPE
       signals: gov.signals || EMPTY_SIGNALS
     };
   } catch (err) {
