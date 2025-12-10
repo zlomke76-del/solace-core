@@ -1,26 +1,27 @@
 // --------------------------------------------------------------
-// Governor Types (FINAL VERSION)
-// Defines the data returned by the pacing engine.
+// Governor Types (FINAL, ASCII-safe)
 // --------------------------------------------------------------
 
-export interface GovernorSignals {
-  // All raw behavioral signals parsed from the message
-  pace?: number;
-  cognitiveLoad?: number;
-  intentClarity?: number;
-  emotionalValence?: number;
+// Governor pacing levels: 0–5
+export type GovernorLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
-  // High-level interpretation signals
-  emotionalDistress?: boolean;
-  decisionContext?: boolean;
-  momentumLow?: boolean;
-
-  // Any additional internal signal the engine may produce
-  [key: string]: any;
+// Internal governor runtime state
+export interface GovernorState {
+  level: GovernorLevel;
 }
 
+// Output returned by updateGovernor()
 export interface GovernorExtras {
-  level: number;            // Governor pacing level 0–5
-  instructions: string;     // A+ instruction block injected into hybrid pipeline
-  signals: GovernorSignals; // Parsed signals used by formatting & diagnostics
+  level: GovernorLevel;
+  instructions: string;
+  
+  // Optional: raw behavioral signals from parser
+  signals?: {
+    emotionalDistress?: boolean;
+    decisionContext?: boolean;
+    urgency?: boolean;
+    slowdown?: boolean;
+    accelerate?: boolean;
+    // add any other signals as needed
+  };
 }
