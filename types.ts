@@ -1,31 +1,37 @@
 // --------------------------------------------------------------
-// Governor Types (FINAL)
-// Ensures consistency across governor-engine, signal-parser,
-// transitions, icon formatter, and route.ts usage.
+// Governor Types — FINAL, CONSISTENT ACROSS ENGINE
 // --------------------------------------------------------------
 
-// 0–5 pacing levels
+// --------------------------------------------------------------
+// Pacing Levels (0–5)
+// --------------------------------------------------------------
 export type PacingLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
-// Signals detected from user message
+// --------------------------------------------------------------
+// Parsed signal structure from message analysis
+// --------------------------------------------------------------
 export interface GovernorSignals {
-  emotionalDistress: boolean;     // user expresses overwhelm, fear, sadness
-  urgency: number;                // 0–1 normalized (fast pacing requests)
-  fatigue: number;                // 0–1 (low energy, burnout signals)
-  decisionPoint: boolean;         // user asking for direction/clarity
-  frustration: boolean;           // irritation, anger, negative friction
-  positiveTone: boolean;          // gratitude, good mood, uplift
+  emotionalDistress: boolean;   // true if user is upset, overloaded, etc.
+  urgency: number;              // 0–1
+  fatigue: number;              // 0–1
+  decisionPoint: boolean;       // true if user is making a choice / fork
+  positiveMomentum: number;     // 0–1 (flow, clarity)
+  negativeMomentum: number;     // 0–1 (friction, frustration)
 }
 
-// Internal governor state
+// --------------------------------------------------------------
+// State stored in-memory on the server
+// --------------------------------------------------------------
 export interface GovernorState {
   level: PacingLevel;
-  lastUpdated: number;            // timestamp for pacing cooldowns
+  lastUpdated: number;
 }
 
-// Output returned to hybrid pipeline and chat route
+// --------------------------------------------------------------
+// Output of governor engine passed into Hybrid Pipeline
+// --------------------------------------------------------------
 export interface GovernorExtras {
-  level: PacingLevel;             // new pacing level after transition
-  instructions: string;           // pacing + icon block
-  signals?: GovernorSignals;      // full diagnostic signals (optional)
+  level: PacingLevel;
+  instructions: string;
+  signals?: GovernorSignals;
 }
