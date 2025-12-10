@@ -1,27 +1,24 @@
 // --------------------------------------------------------------
-// Governor Types (v2) — FINAL, aligned with parser + engine
+// Governor Types (Minimal Stable Version)
 // --------------------------------------------------------------
 
-// 0–5 pacing scale
 export type PacingLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
-// Signals extracted from user messages
+// Signals computed from the message
 export interface GovernorSignals {
-  cognitiveLoad: number;        // 0–1
-  intentClarity: number;        // 0–1
-  emotionalValence: number;     // 0–1 (0 = negative, 1 = positive)
-  fatigue: number;              // 0–1
-  decisionPoint: boolean;       // clear "next step?" moment
+  emotionalValence: number;    // -1 to +1 sentiment
+  intentClarity: number;       // how clear the user's ask is (0–1)
+  fatigue: number;             // signs of overwhelm (0–1)
+  decisionPoint: boolean;      // true when message implies choice/decision
 }
 
-// Internal governor state
-export interface GovernorState {
-  level: PacingLevel;
-}
-
-// Output of updateGovernor()
 export interface GovernorExtras {
   level: PacingLevel;
   instructions: string;
   signals?: GovernorSignals;
+}
+
+// Internal pacing state (held in-memory per server instance)
+export interface GovernorState {
+  level: PacingLevel;
 }
