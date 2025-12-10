@@ -1,31 +1,31 @@
 // --------------------------------------------------------------
-// Governor Types (FINAL, ASCII-safe)
+// Governor Types (FINAL)
+// Ensures consistency across governor-engine, signal-parser,
+// transitions, icon formatter, and route.ts usage.
 // --------------------------------------------------------------
 
-// Governor pacing levels: 0–5
-export type GovernorLevel = 0 | 1 | 2 | 3 | 4 | 5;
-export interface GovernorState {
-  level: GovernorLevel;
-  lastUpdated: number;
+// 0–5 pacing levels
+export type PacingLevel = 0 | 1 | 2 | 3 | 4 | 5;
+
+// Signals detected from user message
+export interface GovernorSignals {
+  emotionalDistress: boolean;     // user expresses overwhelm, fear, sadness
+  urgency: number;                // 0–1 normalized (fast pacing requests)
+  fatigue: number;                // 0–1 (low energy, burnout signals)
+  decisionPoint: boolean;         // user asking for direction/clarity
+  frustration: boolean;           // irritation, anger, negative friction
+  positiveTone: boolean;          // gratitude, good mood, uplift
 }
 
-// Internal governor runtime state
+// Internal governor state
 export interface GovernorState {
-  level: GovernorLevel;
+  level: PacingLevel;
+  lastUpdated: number;            // timestamp for pacing cooldowns
 }
 
-// Output returned by updateGovernor()
+// Output returned to hybrid pipeline and chat route
 export interface GovernorExtras {
-  level: GovernorLevel;
-  instructions: string;
-  
-  // Optional: raw behavioral signals from parser
-  signals?: {
-    emotionalDistress?: boolean;
-    decisionContext?: boolean;
-    urgency?: boolean;
-    slowdown?: boolean;
-    accelerate?: boolean;
-    // add any other signals as needed
-  };
+  level: PacingLevel;             // new pacing level after transition
+  instructions: string;           // pacing + icon block
+  signals?: GovernorSignals;      // full diagnostic signals (optional)
 }
