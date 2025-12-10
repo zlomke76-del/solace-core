@@ -1,22 +1,28 @@
 // --------------------------------------------------------------
-// Governor Adapter (ASCII-safe, production-stable)
+// Governor Adapter (ASCII-safe)
 // Clean interface for route.ts and hybrid.ts.
-// Ensures:
-//  * ASCII sanitation
-//  * Stable return shape
-//  * Fault-tolerant governor calls
-//  * Logging for diagnostics (optional)
 // --------------------------------------------------------------
 
-import { GovernorExtras } from "./types";
+import { GovernorExtras, GovernorSignals } from "./types";
 import { updateGovernor } from "./governor-engine";
 
 // --------------------------------------------------------------
-// ASCII Sanitizer
+// Default safe signal block so TypeScript always has full shape
+// --------------------------------------------------------------
+const EMPTY_SIGNALS: GovernorSignals = {
+  emotionalDistress: false,
+  urgency: 0,
+  fatigue: 0,
+  decisionPoint: false,
+  positiveMomentum: 0,
+  negativeMomentum: 0
+};
+
+// --------------------------------------------------------------
+// ASCII clean
 // --------------------------------------------------------------
 function sanitizeASCII(input: string): string {
   if (!input) return "";
-
   const rep: Record<string, string> = {
     "—": "-", "–": "-", "•": "*",
     "“": "\"", "”": "\"",
@@ -33,36 +39,24 @@ function sanitizeASCII(input: string): string {
 }
 
 // --------------------------------------------------------------
-// applyGovernor
-// Safely processes a message through the pacing engine.
-//
-// Always returns a complete GovernorExtras object:
-// {
-//   level: number,
-//   instructions: string,
-//   signals?: any
-// }
+// Apply governor logic to a message and return full safe extras
 // --------------------------------------------------------------
 export function applyGovernor(message: string): GovernorExtras {
-  const cleanMessage = sanitizeASCII(message || "");
-
   try {
-    const gov = updateGovernor(cleanMessage);
+    const gov = updateGovernor(message);
 
-    // Ensure stable shape (defensive programming)
     return {
       level: typeof gov.level === "number" ? gov.level : 3,
       instructions: sanitizeASCII(gov.instructions || "GOVERNOR_LEVEL: 3"),
-      signals: gov.signals || {}
+      signals: gov.signals || EMPTY_SIGNALS
     };
   } catch (err) {
     console.error("[GovernorAdapter] Governor error:", err);
 
-    // Fail-safe default (mid-level neutral pacing)
     return {
       level: 3,
       instructions: "GOVERNOR_LEVEL: 3",
-      signals: {}
+      signals: EMPTY_SIGNALS
     };
   }
 }
