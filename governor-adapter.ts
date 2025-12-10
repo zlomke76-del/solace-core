@@ -7,15 +7,14 @@ import { GovernorExtras, GovernorSignals } from "./types";
 import { updateGovernor } from "./governor-engine";
 
 // --------------------------------------------------------------
-// Default safe signal block so TypeScript always has full shape
+// Default safe signal block — must match GovernorSignals exactly
 // --------------------------------------------------------------
 const EMPTY_SIGNALS: GovernorSignals = {
-  emotionalDistress: false,
-  urgency: 0,
-  fatigue: 0,
-  decisionPoint: false,
-  positiveMomentum: 0,
-  negativeMomentum: 0
+  emotionalValence: 0.5,   // neutral midpoint
+  intentClarity: 0.5,      // neutral midpoint
+  fatigue: 0,              // none detected
+  urgency: 0,              // no urgency
+  decisionPoint: false     // not a decision scenario
 };
 
 // --------------------------------------------------------------
@@ -47,7 +46,12 @@ export function applyGovernor(message: string): GovernorExtras {
 
     return {
       level: typeof gov.level === "number" ? gov.level : 3,
-      instructions: sanitizeASCII(gov.instructions || "GOVERNOR_LEVEL: 3"),
+
+      instructions: sanitizeASCII(
+        gov.instructions || "GOVERNOR_LEVEL: 3"
+      ),
+
+      // GovernorSignals must match exact shape
       signals: gov.signals || EMPTY_SIGNALS
     };
   } catch (err) {
