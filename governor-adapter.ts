@@ -1,47 +1,43 @@
-// --------------------------------------------------------------
-// Governor Adapter (ASCII-safe)
-// --------------------------------------------------------------
+// ---------------------------------------------------------------
+// GOVERNOR ADAPTER (SAFE FOR HYBRID PIPELINE)
+// Minimal, isolated, ASCII-safe governor injector.
+// No icons. No >255 chars. No cyclical dependencies.
+// ---------------------------------------------------------------
 
-import { GovernorExtras, GovernorSignals } from "./types";
-import { updateGovernor } from "./governor-engine";
+import { updateGovernor } from "@/lib/solace/governor/governor-engine";
 
-const EMPTY_SIGNALS: GovernorSignals = {
-  emotionalValence: 0,
-  intentClarity: 0.5,
-  fatigue: 0,
-  decisionPoint: false
-};
-
+// Full ASCII sanitizer identical to sanitize.ts (duplicated intentionally
+// to keep this adapter self-contained and dependency-stable).
 function sanitizeASCII(input: string): string {
   if (!input) return "";
+
   const rep: Record<string, string> = {
     "—": "-", "–": "-", "•": "*",
     "“": "\"", "”": "\"",
     "‘": "'", "’": "'", "…": "..."
   };
+
   let out = input;
   for (const k in rep) out = out.split(k).join(rep[k]);
+
+  // Replace >255 Unicode chars with '?'
   return out
     .split("")
     .map((c) => (c.charCodeAt(0) > 255 ? "?" : c))
     .join("");
 }
 
-export function applyGovernor(message: string): GovernorExtras {
-  try {
-    const gov = updateGovernor(message);
+// ---------------------------------------------------------------
+// applyGovernor(message)
+// Injects governor metadata and sanitized instructions.
+// Used exclusively by hybrid.ts
+// ---------------------------------------------------------------
+export function applyGovernor(message: string) {
+  const gov = updateGovernor(message);
 
-    return {
-      level: gov.level,
-      instructions: sanitizeASCII(gov.instructions),
-      signals: gov.signals ?? EMPTY_SIGNALS
-    };
-  } catch (err) {
-    console.error("[GovernorAdapter] Failed:", err);
-    return {
-      level: 3,
-      instructions: "GOVERNOR_LEVEL: 3",
-      signals: EMPTY_SIGNALS
-    };
-  }
+  return {
+    level: gov.level,
+    // Instructions ALWAYS sanitized before reaching hybrid pipeline
+    instructions: sanitizeASCII(gov.instructions || "")
+  };
 }
