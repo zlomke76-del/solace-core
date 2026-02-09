@@ -12,20 +12,31 @@ const app = express();
 app.use(express.json());
 
 // ------------------------------------------------------------
-// Permit Store (in-memory)
+// Health check (explicit)
 // ------------------------------------------------------------
-const PERMITS = new Map(); // permitId -> record
+app.get("/health", (_req, res) => {
+  return res.status(200).json({
+    status: "ok",
+    service: "solace-core-authority",
+    time: new Date().toISOString()
+  });
+});
 
 // ------------------------------------------------------------
-// Audit log (hash chained)
+// Permit Store (in-memory)
+// For multi-instance: move to durable store (Redis/Postgres).
+// ------------------------------------------------------------
+const PERMITS = new Map(); // permitId -> { jti, actorId, intent, expiresAt, consumedAt? }
+
+// ------------------------------------------------------------
+// Hash-chained audit log (append-only)
+// Fail-closed: if audit write fails, deny.
 // ------------------------------------------------------------
 const LOG_DIR = path.join(process.cwd(), "logs");
 const AUDIT_PATH = path.join(LOG_DIR, "audit.jsonl");
 
 function ensureLogDir() {
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 }
 
 function sha256Hex(s) {
@@ -33,11 +44,16 @@ function sha256Hex(s) {
 }
 
 function loadLastAuditHash() {
-  if (!fs.existsSync(AUDIT_PATH)) return "GENESIS";
-  const lines = fs.readFileSync(AUDIT_PATH, "utf8").trim().split("\n");
-  if (!lines.length) return "GENESIS";
-  const last = JSON.parse(lines[lines.length - 1]);
-  return last.hash || "GENESIS";
+  try {
+    if (!fs.existsSync(AUDIT_PATH)) return "GENESIS";
+    const data = fs.readFileSync(AUDIT_PATH, "utf8");
+    const lines = data.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) return "GENESIS";
+    const last = JSON.parse(lines[lines.length - 1]);
+    return last.hash || "GENESIS";
+  } catch {
+    return null; // fail closed
+  }
 }
 
 let LAST_AUDIT_HASH = null;
@@ -62,32 +78,24 @@ function appendAudit(event, payload) {
   const hash = sha256Hex(JSON.stringify(entry));
   const finalEntry = { ...entry, hash };
 
-  fs.appendFileSync(AUDIT_PATH, JSON.stringify(finalEntry) + "\n");
+  fs.appendFileSync(AUDIT_PATH, JSON.stringify(finalEntry) + "\n", "utf8");
   LAST_AUDIT_HASH = hash;
 }
 
 // ------------------------------------------------------------
-// HEALTH CHECK (you were missing this)
-// ------------------------------------------------------------
-app.get("/health", (_req, res) => {
-  res.status(200).json({
-    status: "ok",
-    time: new Date().toISOString()
-  });
-});
-
-// ------------------------------------------------------------
-// AUTHORIZE
+// POST /v1/authorize
 // ------------------------------------------------------------
 app.post("/v1/authorize", (req, res) => {
   try {
     const decision = authorizeExecution(req.body);
 
     appendAudit("authorize_decision", {
-      actorId: req.body?.actor?.id,
-      intent: req.body?.intent,
-      issuedAt: req.body?.acceptance?.issuedAt,
-      expiresAt: req.body?.acceptance?.expiresAt,
+      request: {
+        actorId: req.body?.actor?.id,
+        intent: req.body?.intent,
+        issuedAt: req.body?.acceptance?.issuedAt,
+        expiresAt: req.body?.acceptance?.expiresAt
+      },
       decision
     });
 
@@ -103,36 +111,48 @@ app.post("/v1/authorize", (req, res) => {
       });
     }
 
-    res.json(decision);
+    return res.status(200).json(decision);
   } catch (err) {
+    const msg = err?.message ?? "unknown_error";
     try {
-      appendAudit("authorize_error", { error: err.message });
+      appendAudit("authorize_error", { error: msg });
     } catch {}
-
-    res.status(500).json({
+    return res.status(500).json({
       decision: "DENY",
       reason: "authority_evaluation_error",
-      error: err.message
+      error: msg
     });
   }
 });
 
 // ------------------------------------------------------------
-// EXECUTE (one-time consumption)
+// POST /v1/execute
 // ------------------------------------------------------------
 app.post("/v1/execute", (req, res) => {
   try {
     const { permitId, jti, actor, intent } = req.body || {};
 
     if (!permitId || !jti || !actor?.id || !intent) {
-      appendAudit("execute_denied", { reason: "invalid_request", permitId });
-      return res.json({ decision: "DENY", reason: "invalid_request" });
+      appendAudit("execute_denied", {
+        reason: "invalid_or_missing_execute_request",
+        request: { permitId, jti, actorId: actor?.id, intent }
+      });
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "invalid_or_missing_execute_request"
+      });
     }
 
     const record = PERMITS.get(permitId);
     if (!record) {
-      appendAudit("execute_denied", { reason: "permit_not_found", permitId });
-      return res.json({ decision: "DENY", reason: "permit_not_found" });
+      appendAudit("execute_denied", {
+        reason: "permit_not_found",
+        request: { permitId, jti, actorId: actor.id, intent }
+      });
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_not_found"
+      });
     }
 
     if (
@@ -142,22 +162,33 @@ app.post("/v1/execute", (req, res) => {
     ) {
       appendAudit("execute_denied", {
         reason: "permit_binding_mismatch",
-        permitId
+        request: { permitId, jti, actorId: actor.id, intent }
       });
-      return res.json({ decision: "DENY", reason: "permit_binding_mismatch" });
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_binding_mismatch"
+      });
     }
 
-    if (new Date() > new Date(record.expiresAt)) {
-      appendAudit("execute_denied", { reason: "permit_expired", permitId });
-      return res.json({ decision: "DENY", reason: "permit_expired" });
+    const now = new Date();
+    const exp = new Date(record.expiresAt);
+    if (now > exp || Number.isNaN(exp.getTime())) {
+      appendAudit("execute_denied", {
+        reason: "permit_expired",
+        permit: { expiresAt: record.expiresAt }
+      });
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_expired"
+      });
     }
 
     if (record.consumedAt) {
       appendAudit("execute_denied", {
         reason: "permit_already_consumed",
-        permitId
+        permit: { consumedAt: record.consumedAt }
       });
-      return res.json({
+      return res.status(200).json({
         decision: "DENY",
         reason: "permit_already_consumed"
       });
@@ -167,36 +198,35 @@ app.post("/v1/execute", (req, res) => {
     PERMITS.set(permitId, record);
 
     appendAudit("execute_permitted", {
-      permitId,
-      consumedAt: record.consumedAt
+      request: { permitId, jti, actorId: actor.id, intent },
+      permit: { consumedAt: record.consumedAt }
     });
 
-    res.json({
+    return res.status(200).json({
       decision: "PERMIT",
       permitId,
       consumedAt: record.consumedAt
     });
   } catch (err) {
+    const msg = err?.message ?? "unknown_error";
     try {
-      appendAudit("execute_error", { error: err.message });
+      appendAudit("execute_error", { error: msg });
     } catch {}
-
-    res.status(500).json({
+    return res.status(500).json({
       decision: "DENY",
       reason: "execution_gate_error",
-      error: err.message
+      error: msg
     });
   }
 });
 
 // ------------------------------------------------------------
-// DEBUG: GET PERMIT
+// GET /v1/permit/:permitId (debug)
 // ------------------------------------------------------------
 app.get("/v1/permit/:permitId", (req, res) => {
-  res.json(PERMITS.get(req.params.permitId) || null);
+  return res.status(200).json(PERMITS.get(req.params.permitId) || null);
 });
 
-// ------------------------------------------------------------
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`Solace Core Authority listening on http://localhost:${PORT}`);
