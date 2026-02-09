@@ -1,0 +1,9 @@
+{
+  "actor": {
+    "id": "actor:test-role-1"
+  },
+  "intent": "TEST_ACTION",
+  "context": {
+    "risk": "low"
+  }
+}
