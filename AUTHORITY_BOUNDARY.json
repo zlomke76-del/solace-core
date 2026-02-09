@@ -1,0 +1,23 @@
+{
+  "system": "solace-core",
+  "classification": "reference-kernel",
+  "execution": {
+    "allowed": false,
+    "reason": "Reference authority kernel. Not executable."
+  },
+  "imports": {
+    "allowed": false,
+    "reason": "Direct import constitutes authority bypass."
+  },
+  "sideEffects": {
+    "allowed": false
+  },
+  "compliance": {
+    "eu_ai_act": true,
+    "role": "governance_infrastructure_only"
+  },
+  "enforcement": {
+    "denyIfMissing": true,
+    "failClosed": true
+  }
+}
