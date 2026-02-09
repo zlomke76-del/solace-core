@@ -1,0 +1,63 @@
+{
+  "intent_id": "example-001",
+  "timestamp": "2026-02-09T18:00:00Z",
+
+  "actor": {
+    "type": "service",
+    "id": "claims-processor-v2",
+    "display": "Claims Processing Service"
+  },
+
+  "system": {
+    "name": "claims-platform",
+    "version": "2.3.1",
+    "environment": "production"
+  },
+
+  "action": {
+    "name": "update_claim_status",
+    "category": "write",
+    "side_effects": [
+      "database_write"
+    ]
+  },
+
+  "targets": [
+    {
+      "type": "database_record",
+      "id": "claim:784392",
+      "attributes": {
+        "table": "claims",
+        "primary_key": "784392"
+      }
+    }
+  ],
+
+  "parameters": {
+    "status": "approved",
+    "approved_amount_usd": 12500
+  },
+
+  "context": {
+    "policy_mode": "regulated_financial_decision",
+    "risk_tier": "high",
+    "jurisdiction": [
+      "US",
+      "CA"
+    ],
+    "purpose": "Finalize claim decision after automated review"
+  },
+
+  "evidence": [
+    {
+      "type": "document",
+      "ref": "internal://claims/784392/review-report.pdf",
+      "hash": "sha256:9f4c2e3b7a6d1f8e4a9c0d2b6e1f4a8c9d3e7b5a1c6f2d8e9a0b4c7d2e"
+    },
+    {
+      "type": "model_output",
+      "ref": "internal://models/claim-risk-score/784392",
+      "hash": "sha256:3a8d1e7c9b4f2a6d5e0c8b9a7f3d1e6c4b2a9d8e7f0c1a5b4d6e9c2"
+    }
+  ]
+}
