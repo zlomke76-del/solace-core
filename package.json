@@ -1,0 +1,13 @@
+{
+  "name": "solace-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Execution authority kernel. Non-executable. Governance-only.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {},
+  "scripts": {},
+  "engines": {
+    "node": ">=18"
+  }
+}
