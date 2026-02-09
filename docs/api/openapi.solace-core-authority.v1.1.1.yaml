@@ -1,0 +1,1174 @@
+openapi: 3.0.3
+info:
+  title: Solace Core Authority API
+  version: 1.1.1
+  description: |
+    Solace Core is a runtime execution authority engine. It evaluates proposed action intents and returns
+    an enforceable decision: PERMIT / DENY / ESCALATE.
+
+    This API is governance-only. It does not execute tools, perform inference, or call external systems.
+
+    FAIL-CLOSED REQUIREMENT:
+    Clients MUST treat any network failure, 5xx, 429, malformed response, or schema validation failure as DENY.
+
+    FORWARD COMPATIBILITY (OBLIGATIONS):
+    - The obligation enum may expand in future minor versions.
+    - If an obligation is returned that the client does not understand (including vendor extensions),
+      the client MUST treat it as REQUIRED and MUST result in DENY (or continued ESCALATE) unless and until
+      the client can prove fulfillment. Unknown obligations MUST NOT be ignored.
+
+servers:
+  - url: https://api.solacecore.example.com
+    description: Production
+  - url: https://sandbox.api.solacecore.example.com
+    description: Sandbox
+
+tags:
+  - name: Authority
+    description: Authority decisions for proposed intents
+  - name: Attestation
+    description: Cryptographic/runtime attestations for audit and compliance
+  - name: Logs
+    description: Decision logs for auditability and reconstruction
+  - name: Policy
+    description: Policy packs and metadata (declarative constraints)
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /v1/authority/evaluate:
+    post:
+      tags: [Authority]
+      summary: Evaluate an intent and return an authority decision
+      operationId: evaluateIntent
+      description: |
+        Evaluates a proposed intent under the tenant's contract, policy pack(s), and invariants.
+        Returns a binding decision. Systems MUST fail closed if Solace is unavailable or returns DENY/ESCALATE.
+
+        Idempotency:
+        - request_id is REQUIRED and MUST be unique per evaluation attempt.
+        - Replays with the same request_id SHOULD return the same decision (or a 409 conflict if incompatible).
+
+        Dry-run:
+        - options.dry_run=true MUST NOT write any decision logs (no provisional logs).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateRequest"
+            examples:
+              highRiskMedicalEscalate:
+                summary: High-risk medical intent requiring escalation
+                value:
+                  request_id: "req_01HZY7K2Y1C2Z9S2B8A0QH0B5G"
+                  intent:
+                    intent_type: "medical.dosage_guidance"
+                    action:
+                      action_type: "recommendation"
+                      target: "user"
+                      side_effects: ["medical_guidance"]
+                    risk:
+                      risk_class: "high"
+                      impact: ["health"]
+                      reversibility: "irreversible"
+                      adversarial_risk: "medium"
+                      bias_risk: "medium"
+                      requires_explainability: true
+                    jurisdiction:
+                      region: "EU"
+                      country: "DE"
+                    subject:
+                      subject_type: "human"
+                      subject_role: "patient"
+                    authority:
+                      requested_mode: "human_required"
+                    context:
+                      system_id: "chatgpt-eu"
+                      session_id: "sess_abc123"
+                      user_present: true
+                      purpose: "health_support"
+                      data_sensitivity: "special_category"
+                    intent_hash:
+                      alg: "SHA-256"
+                      value: "b0d8f0b2f1a0f58f9d2ef0d4a0b3f2d3f1c0a9b8e7d6c5b4a3f2e1d0c9b8a7f6"
+                  options:
+                    include_trace: true
+      responses:
+        "200":
+          description: Decision returned (binding)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvaluateResponse"
+              examples:
+                escalate:
+                  summary: ESCALATE decision
+                  value:
+                    request_id: "req_01HZY7K2Y1C2Z9S2B8A0QH0B5G"
+                    decision:
+                      decision: "ESCALATE"
+                      reason_code: "EU_HR_HUMAN_OVERSIGHT_REQUIRED"
+                      reason: "High-risk medical guidance requires qualified human oversight."
+                      policy_version: "eu-ai-act@2026-02-01"
+                      invariant_version: "core-invariants@1.0.0"
+                      decision_id: "dec_01HZY7K6C3KQ9K9QK1R8ZQ3N9T"
+                      issued_at: "2026-02-09T15:22:11Z"
+                      expires_at: "2026-02-09T15:27:11Z"
+                      confidence: 1.0
+                    obligations:
+                      - type: "HUMAN_APPROVAL"
+                        namespace: "solace"
+                        required: true
+                        details:
+                          approver_role: "licensed_medical_professional"
+                          evidence_required: true
+                      - type: "LOG_PERSISTENCE"
+                        namespace: "solace"
+                        required: true
+                        details:
+                          retention_days_min: 180
+                    trace:
+                      - step: "VALIDATE_SCHEMA"
+                        outcome: "PASS"
+                      - step: "LOAD_TENANT_CONTRACT"
+                        outcome: "PASS"
+                      - step: "APPLY_POLICY_PACKS"
+                        outcome: "PASS"
+                      - step: "EVALUATE_INVARIANTS"
+                        outcome: "PASS"
+                      - step: "DECIDE"
+                        outcome: "ESCALATE"
+        "400":
+          description: Invalid request (malformed intent, missing fields). Must be treated as DENY by clients.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidRequest:
+                  value:
+                    error:
+                      code: "INVALID_REQUEST"
+                      message: "Missing required field: intent.risk.risk_class"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: "UNAUTHORIZED"
+                      message: "Missing or invalid API key."
+        "403":
+          description: Contract/jurisdiction/mode prohibits this request (not an obligation failure)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                forbiddenScope:
+                  value:
+                    error:
+                      code: "FORBIDDEN_CONTRACT_SCOPE"
+                      message: "Intent type not permitted under tenant contract."
+        "409":
+          description: Conflict (e.g., replayed request_id with incompatible payload)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                conflictIdempotency:
+                  value:
+                    error:
+                      code: "CONFLICT_IDEMPOTENCY"
+                      message: "request_id replayed with incompatible payload."
+        "429":
+          description: Rate limited (risk-based throttling). Clients must fail closed or degrade to safe refusal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  value:
+                    error:
+                      code: "RATE_LIMITED_RISK_QUOTA"
+                      message: "Risk quota exceeded; retry after backoff or downgrade to safe refusal."
+        "500":
+          description: Internal error. Clients MUST fail closed (treat as DENY).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internalError:
+                  value:
+                    error:
+                      code: "INTERNAL_ERROR"
+                      message: "Internal server error."
+        "503":
+          description: Service unavailable. Clients MUST fail closed (treat as DENY).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unavailable:
+                  value:
+                    error:
+                      code: "SERVICE_UNAVAILABLE"
+                      message: "Service unavailable."
+
+  /v1/authority/decisions/{decision_id}/ack:
+    post:
+      tags: [Authority]
+      summary: Acknowledge obligations (e.g., human approval) and request re-evaluation
+      operationId: acknowledgeDecision
+      description: |
+        Used when a prior decision returned ESCALATE with obligations. The client submits evidence that
+        obligations are satisfied (e.g., human approval) and requests a new evaluation bound to the prior decision.
+
+        Expiry behavior:
+        - expires_at is HARD for /ack: if the referenced decision is expired, the service returns 409 (DECISION_EXPIRED).
+        - Clients MUST re-evaluate via /v1/authority/evaluate after expiry.
+
+        Uniform decision envelope:
+        - Obligation insufficiency SHOULD return 200 with a decision of DENY or ESCALATE and reason_code OBLIGATION_NOT_SATISFIED.
+        - 403 is reserved for contract/jurisdiction/mode prohibitions, not missing/insufficient evidence.
+
+        Note:
+        - Decision expiry is advisory for execution: clients are non-compliant if they execute after expiry without re-evaluation.
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Decision ID from a prior EvaluateResponse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AckRequest"
+            examples:
+              humanApprovalJwt:
+                summary: Human approval evidence with JWT proof
+                value:
+                  request_id: "req_01HZY7M0J9D2D0Q1B9FQ0B2S1Z"
+                  evidence:
+                    type: "human_approval"
+                    attestor:
+                      role: "licensed_medical_professional"
+                      id: "prof_9f1a2b3c"
+                      jurisdiction:
+                        region: "EU"
+                        country: "DE"
+                    evidence_hash:
+                      alg: "SHA-256"
+                      value: "1f2e3d4c5b6a7980a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0"
+                    proof_type: "jwt"
+                    proof_media_type: "application/jwt"
+                    proof: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    issued_at: "2026-02-09T15:23:20Z"
+                    expires_at: "2026-02-09T16:23:20Z"
+      responses:
+        "200":
+          description: New decision returned (binding). Even if obligations are insufficient, decision is returned here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvaluateResponse"
+              examples:
+                obligationNotSatisfied:
+                  summary: Evidence provided but insufficient → uniform decision response
+                  value:
+                    request_id: "req_01HZY7M0J9D2D0Q1B9FQ0B2S1Z"
+                    decision:
+                      decision: "ESCALATE"
+                      reason_code: "OBLIGATION_NOT_SATISFIED"
+                      reason: "Required obligation evidence was missing or insufficient."
+                      policy_version: "eu-ai-act@2026-02-01"
+                      invariant_version: "core-invariants@1.0.0"
+                      decision_id: "dec_01HZY7N9W7X4Q0JQW0KJ1Q2Z8P"
+                      issued_at: "2026-02-09T15:24:02Z"
+                      expires_at: "2026-02-09T15:29:02Z"
+                      confidence: 1.0
+                    obligations:
+                      - type: "HUMAN_APPROVAL"
+                        namespace: "solace"
+                        required: true
+                        details:
+                          approver_role: "licensed_medical_professional"
+                          evidence_required: true
+        "400":
+          description: Invalid evidence payload (malformed). Must be treated as DENY by clients.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidEvidence:
+                  value:
+                    error:
+                      code: "INVALID_REQUEST"
+                      message: "Malformed evidence payload."
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: "UNAUTHORIZED"
+                      message: "Missing or invalid API key."
+        "403":
+          description: Contract/jurisdiction/mode prohibits this acknowledgement (not obligation insufficiency)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                forbiddenAck:
+                  value:
+                    error:
+                      code: "FORBIDDEN_CONTRACT_SCOPE"
+                      message: "Acknowledgement not permitted under tenant contract."
+        "404":
+          description: decision_id not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value:
+                    error:
+                      code: "DECISION_NOT_FOUND"
+                      message: "Decision ID not found."
+        "409":
+          description: Conflict (expired, already finalized, or incompatible state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                expired:
+                  value:
+                    error:
+                      code: "DECISION_EXPIRED"
+                      message: "Decision expired; re-evaluation required."
+                finalized:
+                  value:
+                    error:
+                      code: "DECISION_FINALIZED"
+                      message: "Decision already finalized; acknowledgement not permitted."
+
+  /v1/attestation:
+    get:
+      tags: [Attestation]
+      summary: Get runtime and policy attestation for audit
+      operationId: getAttestation
+      description: |
+        Returns the versions/hashes of the core invariants, policy packs, boundary declarations, and (optionally)
+        tenant contract snapshots governing the current runtime. Designed for audits and regulator-facing evidence.
+
+        Note:
+        - If tenant contracts can override baseline policies, tenant_contract.sha256 SHOULD be present.
+      responses:
+        "200":
+          description: Attestation payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttestationResponse"
+              examples:
+                attestationExample:
+                  value:
+                    service:
+                      name: "solace-core"
+                      version: "1.1.1"
+                    runtime:
+                      environment: "production"
+                      started_at: "2026-02-09T12:00:00Z"
+                    invariants:
+                      version: "core-invariants@1.0.0"
+                      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    boundary:
+                      version: "boundary@1.0.0"
+                      sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    tenant_contract:
+                      version: "contract@2026-02-01"
+                      sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    policies:
+                      - policy_id: "eu-ai-act"
+                        version: "2026-02-01"
+                        sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/logs/decisions:
+    get:
+      tags: [Logs]
+      summary: List decision logs
+      operationId: listDecisionLogs
+      description: |
+        Retrieves decision log summaries. Logs are tenant-scoped.
+        The service should expose only metadata/hashes unless contract allows expanded detail.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive start timestamp
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Exclusive end timestamp
+        - name: decision
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DecisionEnum"
+        - name: intent_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: system_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: redaction_level
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [minimal, standard, full]
+            default: standard
+          description: |
+            Controls how much detail is returned, subject to contract.
+            minimal: hashes + decision metadata
+            standard: includes intent metadata with redactions
+            full: includes allowed additional fields per contract
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination cursor
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        "200":
+          description: Paginated decision logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionLogListResponse"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Contract does not allow requested log access/redaction level
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/logs/decisions/{decision_id}:
+    get:
+      tags: [Logs]
+      summary: Get a specific decision log entry
+      operationId: getDecisionLog
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Decision log entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionLogEntry"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Contract does not allow log access
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/policy/packs:
+    get:
+      tags: [Policy]
+      summary: List available policy packs for this tenant
+      operationId: listPolicyPacks
+      responses:
+        "200":
+          description: Policy packs available to the tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyPackListResponse"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/policy/packs/{policy_id}:
+    get:
+      tags: [Policy]
+      summary: Get metadata for a policy pack (and optionally its rules)
+      operationId: getPolicyPack
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: include_rules
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Policy pack metadata (and optional rules)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyPackResponse"
+        "401":
+          description: Missing/invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Policy pack not found / not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Solace-API-Key
+      description: Tenant-scoped API key. Must be bound to a contract, jurisdiction, and allowed intent classes.
+
+  schemas:
+    ErrorCodeEnum:
+      type: string
+      description: Stable error code identifiers. Non-exhaustive; clients MUST treat unknown codes fail-closed.
+      enum:
+        - INVALID_REQUEST
+        - UNAUTHORIZED
+        - FORBIDDEN_CONTRACT_SCOPE
+        - CONFLICT_IDEMPOTENCY
+        - DECISION_EXPIRED
+        - DECISION_FINALIZED
+        - DECISION_NOT_FOUND
+        - RATE_LIMITED_RISK_QUOTA
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+
+    EvaluateRequest:
+      type: object
+      required: [request_id, intent]
+      properties:
+        request_id:
+          type: string
+          description: Client-generated idempotency key for this evaluation request
+        intent:
+          $ref: "#/components/schemas/Intent"
+        options:
+          $ref: "#/components/schemas/EvaluateOptions"
+
+    EvaluateOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        include_trace:
+          type: boolean
+          default: false
+          description: Include evaluation trace steps for debugging/audit (subject to contract)
+        dry_run:
+          type: boolean
+          default: false
+          description: Evaluate without writing any decision log entry (no provisional logs)
+
+    EvaluateResponse:
+      type: object
+      required: [request_id, decision]
+      properties:
+        request_id:
+          type: string
+        decision:
+          $ref: "#/components/schemas/Decision"
+        obligations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Obligation"
+        trace:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceStep"
+
+    AckRequest:
+      type: object
+      required: [request_id, evidence]
+      properties:
+        request_id:
+          type: string
+          description: Client-generated idempotency key for this acknowledgement
+        evidence:
+          $ref: "#/components/schemas/Evidence"
+
+    Intent:
+      type: object
+      additionalProperties: false
+      required: [intent_type, action, risk, jurisdiction, subject, authority]
+      properties:
+        intent_type:
+          type: string
+          description: Namespaced intent identifier (e.g., "medical.dosage_guidance")
+        action:
+          $ref: "#/components/schemas/ActionDescriptor"
+        risk:
+          $ref: "#/components/schemas/RiskDescriptor"
+        jurisdiction:
+          $ref: "#/components/schemas/Jurisdiction"
+        subject:
+          $ref: "#/components/schemas/Subject"
+        authority:
+          $ref: "#/components/schemas/AuthorityRequest"
+        context:
+          $ref: "#/components/schemas/IntentContext"
+        intent_hash:
+          $ref: "#/components/schemas/HashRef"
+
+    HashRef:
+      type: object
+      additionalProperties: false
+      required: [alg, value]
+      properties:
+        alg:
+          type: string
+          description: |
+            Hash algorithm identifier. SHA-256 is the default and only guaranteed-supported value.
+            Other values may be rejected by policy or contract scope.
+          example: "SHA-256"
+        value:
+          type: string
+          description: Hash hex string of canonicalized JSON payload (see integration docs)
+
+    ActionDescriptor:
+      type: object
+      additionalProperties: false
+      required: [action_type, target, side_effects]
+      properties:
+        action_type:
+          type: string
+          description: Type of action proposed (e.g., "recommendation", "api_call", "workflow_trigger")
+        target:
+          type: string
+          description: Intended target of the effect (e.g., "user", "system", "external_service")
+        side_effects:
+          type: array
+          items:
+            type: string
+          description: Declared side effects (e.g., "financial_transfer", "medical_guidance")
+        resource:
+          type: string
+          description: Optional resource identifier (e.g., "payments.transfer", "ehr.update")
+        parameters_redacted:
+          type: boolean
+          default: true
+          description: Whether sensitive parameters are redacted from the intent for privacy
+
+    RiskDescriptor:
+      type: object
+      additionalProperties: false
+      required: [risk_class, impact, reversibility]
+      properties:
+        risk_class:
+          type: string
+          enum: [low, medium, high]
+        impact:
+          type: array
+          items:
+            type: string
+            enum:
+              [health, safety, finance, legal, privacy, reputation, critical_infrastructure, employment, education, access_to_services, other]
+        reversibility:
+          type: string
+          enum: [reversible, partially_reversible, irreversible]
+        confidence_required:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Optional threshold requested by caller; Solace may DENY if not satisfiable
+        adversarial_risk:
+          type: string
+          enum: [low, medium, high]
+          description: Optional declared adversarial/prompt-injection risk posture for policy rules
+        bias_risk:
+          type: string
+          enum: [low, medium, high]
+          description: Optional declared bias/discrimination risk posture for policy rules
+        requires_explainability:
+          type: boolean
+          description: Optional flag to drive explainability obligations in policy packs
+        requires_incident_reporting:
+          type: boolean
+          description: Optional flag to drive incident/reporting obligations in policy packs
+
+    Jurisdiction:
+      type: object
+      additionalProperties: false
+      required: [region]
+      properties:
+        region:
+          type: string
+          enum: [EU, US, UK, CA, AU, OTHER]
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code when applicable (e.g., "DE")
+        locale:
+          type: string
+          description: Optional locale (e.g., "de-DE")
+
+    Subject:
+      type: object
+      additionalProperties: false
+      required: [subject_type, subject_role]
+      properties:
+        subject_type:
+          type: string
+          enum: [human, organization, system]
+        subject_role:
+          type: string
+          description: Role of subject (e.g., "patient", "consumer", "employee")
+        age_group:
+          type: string
+          enum: [unknown, minor, adult]
+        protected_class_context:
+          type: boolean
+          default: false
+          description: Whether the action pertains to protected class handling (no sensitive attributes required)
+
+    AuthorityRequest:
+      type: object
+      additionalProperties: false
+      required: [requested_mode]
+      properties:
+        requested_mode:
+          type: string
+          enum: [auto_ok, human_required, external_authority_required]
+          description: Caller-declared required authority mode for this action
+
+    IntentContext:
+      type: object
+      additionalProperties: false
+      properties:
+        system_id:
+          type: string
+          description: Identifier of the integrating system (e.g., "chatgpt-eu")
+        session_id:
+          type: string
+        user_present:
+          type: boolean
+        purpose:
+          type: string
+          description: Stated purpose (e.g., "customer_support", "health_support")
+        data_sensitivity:
+          type: string
+          enum: [none, personal, special_category, phi, pci, financial_regulated, confidential, regulated]
+          description: Data sensitivity classification (multi-jurisdiction friendly)
+        correlation_id:
+          type: string
+          description: Caller trace correlation id
+
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [decision, reason_code, reason, policy_version, invariant_version, decision_id, issued_at]
+      properties:
+        decision:
+          $ref: "#/components/schemas/DecisionEnum"
+        reason_code:
+          type: string
+          description: Stable code for analytics/audit (e.g., "EU_HR_HUMAN_OVERSIGHT_REQUIRED")
+        reason:
+          type: string
+          description: Human-readable explanation (short)
+        policy_version:
+          type: string
+          description: Policy pack version that governed this decision
+        invariant_version:
+          type: string
+          description: Invariant set version that governed this decision
+        decision_id:
+          type: string
+          description: Unique decision id for later lookup/ack
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: Decision expiry. After expiry, clients must re-evaluate; /ack may return DECISION_EXPIRED.
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: |
+            Optional policy-evaluation confidence (NOT model probability).
+            Represents sufficiency/consistency of inputs for the governing policies/invariants.
+
+    DecisionEnum:
+      type: string
+      enum: [PERMIT, DENY, ESCALATE]
+
+    Obligation:
+      type: object
+      additionalProperties: false
+      required: [required]
+      properties:
+        type:
+          type: string
+          enum:
+            [
+              HUMAN_APPROVAL,
+              EXTERNAL_AUTHORITY,
+              LOG_PERSISTENCE,
+              USER_CONSENT,
+              RATE_LIMIT_BACKOFF,
+              DATA_MINIMIZATION,
+              INCIDENT_REPORT,
+              USER_NOTIFICATION,
+              EXPLAIN_DECISION,
+              REDACT_OUTPUT,
+              SANITIZE_OUTPUT,
+              SECONDARY_APPROVAL,
+              DUAL_CONTROL
+            ]
+          description: Core obligations. Extensions may use vendor_code.
+        vendor_code:
+          type: string
+          description: Optional extension obligation identifier (e.g., "tenant:NOTIFY_SUPERVISOR")
+        namespace:
+          type: string
+          description: Optional issuer namespace (e.g., "solace", "tenant", "regulator-pack")
+        required:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+
+    TraceStep:
+      type: object
+      additionalProperties: false
+      required: [step, outcome]
+      properties:
+        step:
+          type: string
+        outcome:
+          type: string
+        detail:
+          type: string
+
+    Evidence:
+      type: object
+      additionalProperties: false
+      required: [type, attestor]
+      properties:
+        type:
+          type: string
+          enum: [human_approval, external_authority_token, user_consent, dual_control, secondary_approval]
+        attestor:
+          type: object
+          additionalProperties: false
+          required: [role]
+          properties:
+            role:
+              type: string
+              description: Role of the approver/authority (e.g., "licensed_medical_professional")
+            id:
+              type: string
+              description: Optional identifier of the approver (pseudonymous if needed)
+            jurisdiction:
+              $ref: "#/components/schemas/Jurisdiction"
+        evidence_hash:
+          $ref: "#/components/schemas/HashRef"
+        proof_type:
+          type: string
+          enum: [jwt, jws, cose, threshold_sig, opaque]
+          description: Optional cryptographic proof type
+        proof_media_type:
+          type: string
+          description: Optional proof media type (e.g., application/jwt)
+        proof:
+          type: string
+          description: Optional cryptographic proof blob (e.g., JWT, detached JWS)
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    AttestationResponse:
+      type: object
+      additionalProperties: false
+      required: [service, runtime, invariants, boundary, policies]
+      properties:
+        service:
+          type: object
+          additionalProperties: false
+          required: [name, version]
+          properties:
+            name:
+              type: string
+              example: "solace-core"
+            version:
+              type: string
+              example: "1.1.1"
+        runtime:
+          type: object
+          additionalProperties: false
+          required: [environment, started_at]
+          properties:
+            environment:
+              type: string
+              enum: [production, sandbox]
+            started_at:
+              type: string
+              format: date-time
+        invariants:
+          type: object
+          additionalProperties: false
+          required: [version, sha256]
+          properties:
+            version:
+              type: string
+            sha256:
+              type: string
+              description: Hash of invariant set
+        boundary:
+          type: object
+          additionalProperties: false
+          required: [version, sha256]
+          properties:
+            version:
+              type: string
+            sha256:
+              type: string
+              description: Hash of system boundary declaration
+        tenant_contract:
+          type: object
+          additionalProperties: false
+          required: [version, sha256]
+          description: Optional tenant contract snapshot hash (when contract overrides or constraints apply).
+          properties:
+            version:
+              type: string
+            sha256:
+              type: string
+        policies:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [policy_id, version, sha256]
+            properties:
+              policy_id:
+                type: string
+              version:
+                type: string
+              sha256:
+                type: string
+
+    DecisionLogListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionLogSummary"
+        next_cursor:
+          type: string
+          description: Pagination cursor for next page (if any)
+
+    DecisionLogSummary:
+      type: object
+      additionalProperties: false
+      required: [decision_id, issued_at, decision, intent_type, system_id]
+      properties:
+        decision_id:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        decision:
+          $ref: "#/components/schemas/DecisionEnum"
+        intent_type:
+          type: string
+        system_id:
+          type: string
+        intent_hash:
+          $ref: "#/components/schemas/HashRef"
+        redaction_level_applied:
+          type: string
+          enum: [minimal, standard, full]
+          description: Server-applied redaction level
+
+    DecisionLogEntry:
+      type: object
+      additionalProperties: false
+      required: [decision_id, issued_at, request_id, decision, intent]
+      properties:
+        decision_id:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+        decision:
+          $ref: "#/components/schemas/Decision"
+        intent:
+          type: object
+          description: Logged intent metadata; may be redacted by contract/redaction_level
+          additionalProperties: true
+        obligations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Obligation"
+
+    PolicyPackListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyPackMeta"
+
+    PolicyPackResponse:
+      type: object
+      additionalProperties: false
+      required: [meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/PolicyPackMeta"
+        rules:
+          type: object
+          additionalProperties: true
+          description: Optional declarative rules (only if include_rules=true and contract permits)
+
+    PolicyPackMeta:
+      type: object
+      additionalProperties: false
+      required: [policy_id, version, scope, updated_at]
+      properties:
+        policy_id:
+          type: string
+          example: "eu-ai-act"
+        version:
+          type: string
+          example: "2026-02-01"
+        scope:
+          type: object
+          additionalProperties: false
+          required: [regions]
+          properties:
+            regions:
+              type: array
+              items:
+                type: string
+                enum: [EU, US, UK, CA, AU, OTHER]
+            intent_types:
+              type: array
+              items:
+                type: string
+              description: Optional list of covered intent types
+        updated_at:
+          type: string
+          format: date-time
+        sha256:
+          type: string
+          description: Hash of the policy pack content
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCodeEnum"
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured diagnostic details
