@@ -20,6 +20,12 @@ Solace Core does not learn, adapt, optimize, or revise its authority decisions a
 
 ---
 
+## Drift Prevention
+
+Solace Core prevents execution drift by externalizing and enforcing execution authority at runtime. All actions that produce side effects must be declared as explicit intents and submitted to Solace Core for authorization. Solace Core evaluates each intent deterministically and statelessly, issuing a Permit, Deny, or Escalate decision. If Solace Core does not explicitly issue a Permit—due to denial, uncertainty, or unavailability—execution must fail closed and no side effects may occur. Because authority is enforced outside the reasoning or optimization layer, internal model behavior, confidence, learning, or adaptation cannot accumulate unchecked execution power over time. Drift may occur in reasoning, but it cannot manifest as action.
+
+---
+
 ## What This Repository Does *Not* Contain
 
 This repository intentionally excludes:
