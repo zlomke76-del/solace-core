@@ -34,7 +34,7 @@ app.use(express.json());
 
 /**
  * ------------------------------------------------------------
- * JSON parse error guard (fail closed, but visible)
+ * JSON parse error guard
  * ------------------------------------------------------------
  */
 app.use((err, _req, res, next) => {
@@ -53,7 +53,7 @@ app.use((err, _req, res, next) => {
 const PERMITS = new Map();
 
 // ------------------------------------------------------------
-// Hash-chained audit log
+// Hash-chained audit log (append-only, fail-closed)
 // ------------------------------------------------------------
 const LOG_DIR = path.join(process.cwd(), "logs");
 const AUDIT_PATH = path.join(LOG_DIR, "audit.jsonl");
@@ -113,7 +113,13 @@ app.post("/v1/authorize", (req, res) => {
   try {
     const decision = authorizeExecution(req.body);
 
-    appendAudit("authorize_decision", { decision });
+    appendAudit("authorize_decision", {
+      request: {
+        actorId: req.body?.actor?.id,
+        intent: req.body?.intent
+      },
+      decision
+    });
 
     if (decision.decision === "PERMIT") {
       PERMITS.set(decision.permitId, {
@@ -122,16 +128,21 @@ app.post("/v1/authorize", (req, res) => {
         actorId: req.body.actor.id,
         intent: req.body.intent,
         expiresAt: decision.expiresAt,
+        issuedAt: new Date().toISOString(),
         consumedAt: null
       });
     }
 
-    return res.json(decision);
+    return res.status(200).json(decision);
   } catch (err) {
+    const msg = err?.message ?? "unknown_error";
+    try {
+      appendAudit("authorize_error", { error: msg });
+    } catch {}
     return res.status(500).json({
       decision: "DENY",
       reason: "authority_evaluation_error",
-      error: err?.message ?? "unknown_error"
+      error: msg
     });
   }
 });
@@ -142,31 +153,61 @@ app.post("/v1/authorize", (req, res) => {
 app.post("/v1/execute", (req, res) => {
   try {
     const { permitId, jti, actor, intent } = req.body || {};
+
+    if (!permitId || !jti || !actor?.id || !intent) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "invalid_or_missing_execute_request"
+      });
+    }
+
     const record = PERMITS.get(permitId);
+    if (!record) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_not_found"
+      });
+    }
 
     if (
-      !record ||
       record.jti !== jti ||
-      record.actorId !== actor?.id ||
-      record.intent !== intent ||
-      record.consumedAt ||
-      new Date() > new Date(record.expiresAt)
+      record.actorId !== actor.id ||
+      record.intent !== intent
     ) {
-      return res.json({ decision: "DENY" });
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_binding_mismatch"
+      });
+    }
+
+    if (record.consumedAt) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_already_consumed"
+      });
+    }
+
+    if (new Date() > new Date(record.expiresAt)) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "permit_expired"
+      });
     }
 
     record.consumedAt = new Date().toISOString();
     appendAudit("execute_permitted", { permitId });
 
-    return res.json({
+    return res.status(200).json({
       decision: "PERMIT",
       permitId,
       consumedAt: record.consumedAt
     });
   } catch (err) {
+    const msg = err?.message ?? "unknown_error";
     return res.status(500).json({
       decision: "DENY",
-      error: err?.message ?? "unknown_error"
+      reason: "execution_gate_error",
+      error: msg
     });
   }
 });
@@ -175,7 +216,7 @@ app.post("/v1/execute", (req, res) => {
 // GET /v1/permit/:permitId (debug)
 // ------------------------------------------------------------
 app.get("/v1/permit/:permitId", (req, res) => {
-  return res.json(PERMITS.get(req.params.permitId) || null);
+  return res.status(200).json(PERMITS.get(req.params.permitId) || null);
 });
 
 // ------------------------------------------------------------
