@@ -10,6 +10,4 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 fs.writeFileSync("issuer.key", privateKey);
 fs.writeFileSync("issuer.pub", publicKey);
 
-console.log("Issuer keypair generated:");
-console.log(" - issuer.key (PRIVATE, keep secret)");
-console.log(" - issuer.pub (PUBLIC, safe to share)");
+console.log("Issuer keypair generated.");
