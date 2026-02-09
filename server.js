@@ -1,12 +1,11 @@
 // server.js
-// Runtime HTTP wrapper for Solace Core Authority
-// Adds: permit store, one-time permit consumption, audit log (hash-chained)
+// Solace Core Authority — Acceptance-Only (Model B)
+// Verifies externally issued acceptance, binds to execution, fail-closed.
 
 import express from "express";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { authorizeExecution } from "./authority-engine.js";
 
 console.log("BOOT FILE:", import.meta.url);
 
@@ -21,6 +20,7 @@ app.get("/health", (_req, res) => {
   return res.status(200).json({
     status: "ok",
     service: "solace-core-authority",
+    mode: "acceptance-only",
     time: new Date().toISOString()
   });
 });
@@ -40,21 +40,19 @@ app.use(express.json());
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     return res.status(400).json({
-      error: "invalid_json",
+      decision: "DENY",
+      reason: "invalid_json",
       message: err.message
     });
   }
   next(err);
 });
 
-// ------------------------------------------------------------
-// Permit Store (in-memory)
-// ------------------------------------------------------------
-const PERMITS = new Map();
-
-// ------------------------------------------------------------
-// Hash-chained audit log (append-only, fail-closed)
-// ------------------------------------------------------------
+/**
+ * ------------------------------------------------------------
+ * Audit log (append-only, hash-chained)
+ * ------------------------------------------------------------
+ */
 const LOG_DIR = path.join(process.cwd(), "logs");
 const AUDIT_PATH = path.join(LOG_DIR, "audit.jsonl");
 
@@ -106,104 +104,157 @@ function appendAudit(event, payload) {
   LAST_AUDIT_HASH = hash;
 }
 
-// ------------------------------------------------------------
-// POST /v1/authorize
-// ------------------------------------------------------------
-app.post("/v1/authorize", (req, res) => {
-  try {
-    const decision = authorizeExecution(req.body);
+/**
+ * ------------------------------------------------------------
+ * Load issuer public key (external authority)
+ * ------------------------------------------------------------
+ */
+const ISSUER_PUB_PATH = path.join(process.cwd(), "issuer.pub");
+if (!fs.existsSync(ISSUER_PUB_PATH)) {
+  throw new Error("issuer_pubkey_missing");
+}
+const ISSUER_PUBLIC_KEY = fs.readFileSync(ISSUER_PUB_PATH, "utf8");
 
-    appendAudit("authorize_decision", {
-      request: {
-        actorId: req.body?.actor?.id,
-        intent: req.body?.intent
-      },
-      decision
-    });
+/**
+ * ------------------------------------------------------------
+ * Canonicalization helpers
+ * ------------------------------------------------------------
+ */
+function canonical(obj) {
+  return JSON.stringify(obj, Object.keys(obj).sort());
+}
 
-    if (decision.decision === "PERMIT") {
-      PERMITS.set(decision.permitId, {
-        permitId: decision.permitId,
-        jti: decision.jti,
-        actorId: req.body.actor.id,
-        intent: req.body.intent,
-        expiresAt: decision.expiresAt,
-        issuedAt: new Date().toISOString(),
-        consumedAt: null
-      });
-    }
+function computeExecuteHash(execute) {
+  return sha256Hex(canonical(execute));
+}
 
-    return res.status(200).json(decision);
-  } catch (err) {
-    const msg = err?.message ?? "unknown_error";
-    try {
-      appendAudit("authorize_error", { error: msg });
-    } catch {}
-    return res.status(500).json({
-      decision: "DENY",
-      reason: "authority_evaluation_error",
-      error: msg
-    });
-  }
-});
+function verifyAcceptanceSignature(acceptance, executeHash) {
+  const {
+    issuer,
+    actorId,
+    intent,
+    issuedAt,
+    expiresAt,
+    signature
+  } = acceptance;
 
-// ------------------------------------------------------------
-// POST /v1/execute
-// ------------------------------------------------------------
+  const material = canonical({
+    issuer,
+    actorId,
+    intent,
+    executeHash,
+    issuedAt,
+    expiresAt
+  });
+
+  const verifier = crypto.createVerify("SHA256");
+  verifier.update(material);
+
+  return verifier.verify(ISSUER_PUBLIC_KEY, signature, "base64");
+}
+
+/**
+ * ------------------------------------------------------------
+ * POST /v1/execute
+ * ------------------------------------------------------------
+ */
 app.post("/v1/execute", (req, res) => {
   try {
-    const { permitId, jti, actor, intent } = req.body || {};
+    const { intent, execute, acceptance } = req.body || {};
 
-    if (!permitId || !jti || !actor?.id || !intent) {
+    // --- Structural guards ---
+    if (
+      !intent ||
+      !intent.actor?.id ||
+      !intent.intent ||
+      !execute ||
+      !acceptance
+    ) {
       return res.status(200).json({
         decision: "DENY",
         reason: "invalid_or_missing_execute_request"
       });
     }
 
-    const record = PERMITS.get(permitId);
-    if (!record) {
-      return res.status(200).json({
-        decision: "DENY",
-        reason: "permit_not_found"
-      });
-    }
+    const {
+      issuer,
+      actorId,
+      intent: acceptedIntent,
+      issuedAt,
+      expiresAt,
+      signature
+    } = acceptance;
 
     if (
-      record.jti !== jti ||
-      record.actorId !== actor.id ||
-      record.intent !== intent
+      !issuer ||
+      !actorId ||
+      !acceptedIntent ||
+      !issuedAt ||
+      !expiresAt ||
+      !signature
     ) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "permit_binding_mismatch"
+        reason: "invalid_or_missing_acceptance"
       });
     }
 
-    if (record.consumedAt) {
+    // --- Temporal validity ---
+    const now = new Date();
+    if (now < new Date(issuedAt) || now > new Date(expiresAt)) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "permit_already_consumed"
+        reason: "acceptance_not_in_valid_time_window"
       });
     }
 
-    if (new Date() > new Date(record.expiresAt)) {
+    // --- Actor binding ---
+    if (actorId !== intent.actor.id) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "permit_expired"
+        reason: "actor_binding_mismatch"
       });
     }
 
-    record.consumedAt = new Date().toISOString();
-    appendAudit("execute_permitted", { permitId });
+    // --- Intent binding ---
+    if (acceptedIntent !== intent.intent) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "intent_binding_mismatch"
+      });
+    }
+
+    // --- Execution binding ---
+    const executeHash = computeExecuteHash(execute);
+    const sigValid = verifyAcceptanceSignature(acceptance, executeHash);
+
+    if (!sigValid) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "invalid_acceptance_signature"
+      });
+    }
+
+    appendAudit("execute_permitted", {
+      actorId,
+      intent: intent.intent,
+      execute,
+      issuer
+    });
 
     return res.status(200).json({
       decision: "PERMIT",
-      permitId,
-      consumedAt: record.consumedAt
+      actorId,
+      intent: intent.intent,
+      executeHash,
+      issuer,
+      consumedAt: new Date().toISOString()
     });
   } catch (err) {
     const msg = err?.message ?? "unknown_error";
+    try {
+      appendAudit("execute_error", { error: msg });
+    } catch {}
     return res.status(500).json({
       decision: "DENY",
       reason: "execution_gate_error",
@@ -212,17 +263,13 @@ app.post("/v1/execute", (req, res) => {
   }
 });
 
-// ------------------------------------------------------------
-// GET /v1/permit/:permitId (debug)
-// ------------------------------------------------------------
-app.get("/v1/permit/:permitId", (req, res) => {
-  return res.status(200).json(PERMITS.get(req.params.permitId) || null);
-});
-
-// ------------------------------------------------------------
-// Start server
-// ------------------------------------------------------------
+/**
+ * ------------------------------------------------------------
+ * Start server
+ * ------------------------------------------------------------
+ */
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`Solace Core Authority listening on http://localhost:${PORT}`);
+  console.log("Mode: acceptance-only (external authority required)");
 });
