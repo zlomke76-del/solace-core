@@ -9,17 +9,40 @@ import crypto from "crypto";
 import { authorizeExecution } from "./authority-engine.js";
 
 const app = express();
-app.use(express.json());
 
-// ------------------------------------------------------------
-// Health check (explicit)
-// ------------------------------------------------------------
+/**
+ * ------------------------------------------------------------
+ * Health check (MUST be before body parsing)
+ * ------------------------------------------------------------
+ */
 app.get("/health", (_req, res) => {
   return res.status(200).json({
     status: "ok",
     service: "solace-core-authority",
     time: new Date().toISOString()
   });
+});
+
+/**
+ * ------------------------------------------------------------
+ * JSON body parser
+ * ------------------------------------------------------------
+ */
+app.use(express.json());
+
+/**
+ * ------------------------------------------------------------
+ * JSON parse error guard (fail closed, but visible)
+ * ------------------------------------------------------------
+ */
+app.use((err, _req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
+    return res.status(400).json({
+      error: "invalid_json",
+      message: err.message
+    });
+  }
+  next(err);
 });
 
 // ------------------------------------------------------------
