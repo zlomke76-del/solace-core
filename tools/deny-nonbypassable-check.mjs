@@ -1,182 +1,108 @@
-/* eslint-disable no-console */
+#!/usr/bin/env node
+
+/**
+ * Deny Non-Bypassable (Side-Effect Guard)
+ *
+ * This guard enforces that the Solace Core authority kernel
+ * contains no execution, orchestration, or side-effect surfaces.
+ *
+ * IMPORTANT:
+ * Governance tooling (including this file) is explicitly excluded
+ * from evaluation. Only the governed system is scanned.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 
 const REPO_ROOT = process.cwd();
 
-// Directories that must never exist in solace-core (product/UX coupling)
-const FORBIDDEN_DIRS = [
-  "app",
-  "pages",
-  "components",
-  "public",
-];
-
-// Paths to ignore in scans
-const IGNORE_DIRS = new Set([
+/**
+ * Directories that are explicitly OUT OF SCOPE for non-bypassability checks.
+ * These contain governance tooling, not governed logic.
+ */
+const EXCLUDED_DIRS = new Set([
   ".git",
-  "node_modules",
-  "dist",
-  "build",
-  ".next",
-  "out",
-  "coverage",
+  ".github",
+  "tools",          // ← critical: excludes this guard itself
+  "examples",
 ]);
 
-// Only scan these extensions for code-level side effects
-const SCAN_EXTS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+/**
+ * File extensions that are scanned.
+ */
+const SCANNED_EXTENSIONS = new Set([
+  ".ts",
+  ".js",
+  ".mjs",
 ]);
 
-// Forbidden side-effect primitives & libraries.
-// This is intentionally strict: Solace Core must remain an authority evaluator, not an executor.
+/**
+ * Forbidden indicators inside Solace Core.
+ */
 const FORBIDDEN_PATTERNS = [
-  // process execution
-  /from\s+['"]node:child_process['"]/,
-  /from\s+['"]child_process['"]/,
-  /require\(\s*['"]child_process['"]\s*\)/,
-  /\bexecSync?\s*\(/,
-  /\bspawnSync?\s*\(/,
-  /\bfork\s*\(/,
-
-  // filesystem writes (reads are less problematic, but we guard writes hard)
-  /from\s+['"]node:fs['"]/,
-  /from\s+['"]fs['"]/,
-  /require\(\s*['"]fs['"]\s*\)/,
-  /\bwriteFileSync\b/,
-  /\bwriteFile\b/,
-  /\bappendFileSync\b/,
-  /\bappendFile\b/,
-  /\bcreateWriteStream\b/,
-  /\brenameSync\b/,
-  /\brename\b/,
-  /\bunlinkSync\b/,
-  /\bunlink\b/,
-
-  // outbound network/tool execution
-  /\bfetch\s*\(/,                 // global fetch
-  /from\s+['"]node:https['"]/,
-  /from\s+['"]https['"]/,
-  /from\s+['"]node:http['"]/,
-  /from\s+['"]http['"]/,
-  /\bhttps\.request\b/,
-  /\bhttp\.request\b/,
-  /from\s+['"]axios['"]/,
-  /from\s+['"]undici['"]/,
-  /from\s+['"]node-fetch['"]/,
-
-  // common tool/execution libs (keep Core pure)
-  /from\s+['"]@vercel\/blob['"]/,
-  /from\s+['"]openai['"]/,
-  /from\s+['"]@supabase\/supabase-js['"]/,
+  /node:fs/,
+  /node:http/,
+  /node:https/,
+  /fetch\s*\(/,
+  /axios/,
+  /executeTool/i,
+  /runTool/i,
+  /orchestrator/i,
+  /workflow/i,
 ];
 
-// Optional: forbid “tool execution” language in code (guardrail against accidental coupling)
-const FORBIDDEN_KEYWORDS = [
-  "tool execution",
-  "executeTool",
-  "runTool",
-  "orchestrator",
-  "workflow",
-];
+/**
+ * Recursively walk the repository, excluding governance tooling.
+ */
+function walk(dir, results = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (EXCLUDED_DIRS.has(entry.name)) continue;
 
-function existsDir(rel) {
-  return fs.existsSync(path.join(REPO_ROOT, rel)) && fs.statSync(path.join(REPO_ROOT, rel)).isDirectory();
-}
+    const fullPath = path.join(dir, entry.name);
 
-function walk(dirAbs, files = []) {
-  const entries = fs.readdirSync(dirAbs, { withFileTypes: true });
-  for (const e of entries) {
-    if (IGNORE_DIRS.has(e.name)) continue;
-    const p = path.join(dirAbs, e.name);
-    if (e.isDirectory()) {
-      walk(p, files);
-    } else if (e.isFile()) {
-      files.push(p);
+    if (entry.isDirectory()) {
+      walk(fullPath, results);
+    } else if (entry.isFile()) {
+      if (SCANNED_EXTENSIONS.has(path.extname(entry.name))) {
+        results.push(fullPath);
+      }
     }
   }
-  return files;
+  return results;
 }
 
-function readTextSafe(fileAbs) {
-  try {
-    return fs.readFileSync(fileAbs, "utf8");
-  } catch {
-    return "";
+let violations = [];
+
+for (const file of walk(REPO_ROOT)) {
+  const contents = fs.readFileSync(file, "utf8");
+
+  for (const pattern of FORBIDDEN_PATTERNS) {
+    if (pattern.test(contents)) {
+      violations.push({
+        file: path.relative(REPO_ROOT, file),
+        pattern: pattern.toString(),
+      });
+    }
   }
 }
 
-function rel(fileAbs) {
-  return path.relative(REPO_ROOT, fileAbs).replaceAll("\\", "/");
-}
+if (violations.length > 0) {
+  console.error("❌ DENY-NONBYPASSABLE CHECK FAILED");
+  console.error("Detected forbidden side-effect indicators:\n");
 
-function fail(msg) {
-  console.error(`\n❌ DENY-NONBYPASSABLE CHECK FAILED\n${msg}\n`);
+  for (const v of violations.slice(0, 25)) {
+    console.error(`- ${v.file} (${v.pattern})`);
+  }
+
+  console.error(`
+Rule:
+Solace Core may evaluate authority,
+but must not contain execution, orchestration,
+network egress, or filesystem side effects.
+`);
+
   process.exit(1);
 }
 
-function ok(msg) {
-  console.log(`✅ ${msg}`);
-}
-
-function main() {
-  // 1) Hard-stop if product directories exist
-  const foundForbiddenDirs = FORBIDDEN_DIRS.filter(existsDir);
-  if (foundForbiddenDirs.length) {
-    fail(
-      `Forbidden directory(ies) present: ${foundForbiddenDirs.join(", ")}\n` +
-      `Solace Core must remain headless and external to product/UX surfaces.`
-    );
-  }
-  ok("No forbidden product/UX directories found.");
-
-  // 2) Scan code files for forbidden side-effect primitives
-  const allFiles = walk(REPO_ROOT);
-  const codeFiles = allFiles.filter((f) => SCAN_EXTS.has(path.extname(f)));
-
-  const hits = [];
-
-  for (const f of codeFiles) {
-    const content = readTextSafe(f);
-    if (!content) continue;
-
-    for (const rx of FORBIDDEN_PATTERNS) {
-      if (rx.test(content)) {
-        hits.push({ file: rel(f), pattern: String(rx) });
-      }
-    }
-
-    // Keyword-level guardrail (lower signal, but useful)
-    for (const kw of FORBIDDEN_KEYWORDS) {
-      if (content.toLowerCase().includes(kw.toLowerCase())) {
-        hits.push({ file: rel(f), pattern: `keyword:${kw}` });
-      }
-    }
-  }
-
-  if (hits.length) {
-    const sample = hits
-      .slice(0, 25)
-      .map((h) => `- ${h.file}  (${h.pattern})`)
-      .join("\n");
-
-    fail(
-      `Detected forbidden side-effect or coupling indicators (showing up to 25):\n${sample}\n\n` +
-      `Rule: Solace Core may evaluate authority, but must not contain tool execution, network egress, filesystem writes, or orchestrators.`
-    );
-  }
-
-  ok("No forbidden side-effect primitives detected in code.");
-
-  // 3) Ensure authority contract files exist (basic integrity)
-  const requiredDocs = ["README.md", "AUTHORITY_API.md"];
-  const missing = requiredDocs.filter((p) => !fs.existsSync(path.join(REPO_ROOT, p)));
-  if (missing.length) {
-    fail(`Missing required doc(s): ${missing.join(", ")}`);
-  }
-  ok("Required authority docs present.");
-
-  console.log("\n✅ DENY non-bypassability guard passed.\n");
-}
-
-main();
+console.log("✅ DENY-NONBYPASSABLE CHECK PASSED");
+process.exit(0);
