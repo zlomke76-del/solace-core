@@ -8,5 +8,13 @@
     "action": "TEST_ACTION",
     "target": "sandbox"
   },
-  "acceptance": { /* FULL acceptance.json pasted here */ }
+  "acceptance": {
+    "issuer": "human-board-1",
+    "actorId": "actor:test-role-1",
+    "intent": "TEST_ACTION",
+    "executeHash": "ddaebf7c87571bc510d30d5af15694804155ac08c9d2e6fdff77b3d85235f8c1",
+    "issuedAt": "2026-02-10T00:09:56.769Z",
+    "expiresAt": "2026-02-10T01:09:56.770Z",
+    "signature": "BASE64_SIGNATURE_STRING"
+  }
 }
