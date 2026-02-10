@@ -1,205 +1,344 @@
-# AUTHORITY_API.md
-Solace Core — Authority API (Public Contract)
+Solace Core — Authority & Execution Control (Public Contract)
 
-Solace Core is a runtime execution authority engine. It evaluates **proposed action intents** and returns an enforceable decision: **Permit / Deny / Escalate**.
+Purpose
 
-This document defines the **public contract** for integrating with Solace Core as an external control plane.
+Solace Core provides non-bypassable execution authority for systems that generate, propose, or automate actions with real-world side effects.
 
----
+This document defines the public integration contract governing:
 
-## Core Invariant
+Governance evaluation of proposed intents (policy, risk, jurisdiction)
 
-**Solace Core is the final authority on execution.**
+Runtime enforcement of execution authority (cryptographic, fail-closed)
 
-- If Solace Core does **not** issue a `PERMIT`, **no side effects may occur**.
-- If Solace Core is **unavailable**, **unreachable**, or **indeterminate**, execution **must fail closed**.
-- Integrations may *propose*, *prepare*, and *simulate* actions, but may not execute side effects without an explicit `PERMIT`.
+Solace Core does not perform inference, does not execute tools, and does not optimize outcomes.
+It exists solely to decide whether execution may occur — and to make unauthorized execution impossible.
 
-Authority is evaluated at runtime and is not inferred from prior approvals, confidence, learning, or optimization.
+Core Invariant
 
----
+Solace Core is the final authority on execution.
 
-## Drift Prevention
+If Solace Core does not issue a PERMIT, no side effects may occur.
 
-Solace Core prevents execution drift by externalizing and enforcing execution authority at runtime. All actions that produce side effects must be declared as explicit action intents and submitted to Solace Core for authorization prior to execution. Solace Core evaluates each intent deterministically and statelessly, issuing a Permit, Deny, or Escalate decision. If Solace Core does not explicitly issue a Permit—due to denial, uncertainty, or unavailability—execution must fail closed and no side effects may occur. Because authority is enforced outside the reasoning or optimization layer, internal model behavior, confidence, learning, or adaptation cannot accumulate unchecked execution power over time. Drift may occur in reasoning, but it cannot manifest as action.
+If Solace Core is unavailable, unreachable, or indeterminate, execution must fail closed.
 
----
+No retry, fallback, degraded mode, or override may produce side effects without an explicit PERMIT.
 
-## Formal Authority Property
+Integrations may propose, prepare, simulate, or explain actions —
+but may not execute side effects without runtime authorization enforced by Solace Core.
 
-### Non-Bypassable Execution Authority
+Authority is never inferred from:
 
-For any action \( A \) that produces side effects \( S \):
+model confidence
 
-- Execution of \( A \) is permitted **if and only if** Solace Core issues an explicit `PERMIT` decision for \( A \) at runtime.
-- If Solace Core returns `DENY`, `ESCALATE`, or is unavailable, unreachable, or indeterminate, then \( A \) **MUST NOT** execute and \( S = \varnothing \).
-- There exists no execution path, retry mechanism, fallback, degraded mode, or override by which side effects may occur without a corresponding `PERMIT`.
+prior approvals
 
-This property is enforced by architectural design and is invariant over time.
+learning or optimization
 
----
+operator intent
 
-## Trust Boundary
+historical behavior
 
-Solace Core must remain **external** to the systems it governs.
+System Model (Authoritative)
 
-- Integrations call Solace Core over a defined interface.
-- Integrations must not embed, modify, fork, or reinterpret Solace Core logic.
-- Any system that can bypass Solace Core is **not governed** by Solace Core.
+Solace is intentionally split into two distinct control phases:
+
+PHASE 1 — Governance Evaluation (Semantic)
+PHASE 2 — Execution Authority (Runtime Enforcement)
+
+
+These phases are not interchangeable.
+
+Phase 1 — Governance Evaluation (Policy & Risk)
+Purpose
+
+Determine whether a class of action is allowed, denied, or requires escalation under:
+
+policy packs
+
+jurisdictional constraints
+
+risk classification
+
+authority mode (automatic vs human vs external)
+
+This phase answers:
+
+“Is this kind of action allowed under the governing rules, and under what conditions?”
+
+Interface
+
+Governance evaluation is performed via the Authority Evaluation API:
+
+POST /v1/authority/evaluate
+
+
+(as defined in openapi.solace-core-authority.v1.x.yaml)
+
+Inputs
+
+A semantic Action Intent, including (but not limited to):
+
+intent type
+
+declared side effects
+
+risk classification
+
+jurisdiction
+
+subject
+
+requested authority mode
+
+contextual metadata
+
+This input is descriptive, not executable.
+
+Outputs
+
+One of three governance decisions:
+
+PERMIT
+
+The intent is allowed under current policy.
+
+Does not authorize execution.
+
+Allows issuance of a runtime execution acceptance.
+
+DENY
+
+The intent is prohibited.
+
+No execution may occur.
+
+No acceptance may be issued.
+
+ESCALATE
+
+The intent is not allowed without additional authority.
+
+Obligations are returned (e.g., human approval, external authority).
+
+Automation must pause until obligations are satisfied and re-evaluated.
+
+Governance decisions may expire and may require re-evaluation.
+
+Phase 2 — Execution Authority (Runtime Enforcement)
+Purpose
+
+Determine whether a specific execution instance may occur now, based on explicit authority.
+
+This phase answers:
+
+“Has an authorized party cryptographically approved this exact execution?”
+
+Properties
+
+Execution authority enforcement is:
+
+Deterministic
+
+Fail-closed
+
+Non-bypassable
+
+Cryptographically verifiable
+
+Independent of model behavior
+
+Solace Core does not reason about policy, risk, or intent semantics at this stage.
+
+Execution Acceptance
+
+Execution authority is conveyed via a signed acceptance artifact issued by an external authority.
+
+An acceptance binds exactly:
+
+actorId
+
+intent (string identifier)
+
+executeHash (hash of the exact execution payload)
+
+issuedAt / expiresAt
+
+issuer
+
+Any material change requires a new acceptance.
+
+Runtime Enforcement
+
+Execution enforcement is performed via:
+
+POST /v1/execute
+
+
+with the required envelope:
+
+{
+  "intent": { ...semantic intent object... },
+  "execute": { ...exact execution payload... },
+  "acceptance": { ...signed authority artifact... }
+}
+
+
+Solace Core performs the following checks in order:
+
+Request is syntactically valid
+
+Required fields are present
+
+Acceptance time window is valid
+
+Actor binding matches
+
+Intent string matches
+
+Execution hash matches
+
+Signature verifies
+
+Audit record is appended
+
+If any check fails → DENY
+
+If all checks pass → PERMIT
+
+Solace Core does not execute the payload.
+It only authorizes or refuses.
+
+Drift Containment (Accurate Scope)
+
+Solace Core does not prevent cognitive or model drift.
+
+It prevents authority drift.
+
+Models may change behavior, confidence, or reasoning.
+
+Systems may adapt, learn, or optimize.
+
+Proposals may evolve over time.
+
+None of this can result in side effects without external, explicit execution authority.
+
+Drift may exist in reasoning.
+Drift cannot manifest as action.
+
+Trust Boundary
+
+Solace Core must remain external to the systems it governs.
+
+Integrations must call Solace Core over a defined interface.
+
+Solace Core logic must not be embedded, forked, or reinterpreted.
+
+Any system that can execute without passing through Solace Core is not governed.
 
 Authority exists only if it cannot be overridden.
 
----
+Definitions
+Action Intent (Governance Phase)
 
-## Definitions
+A structured, semantic declaration describing a proposed category of action, used for governance evaluation.
 
-### Action Intent
+Characteristics:
 
-An **Action Intent** is a structured declaration of what a system proposes to do *before* any side effects occur.
+Descriptive, not executable
 
-An Action Intent must be:
-- **Specific** — what action, what target, what parameters
-- **Contextual** — who or what requested it, under what policy or mode
-- **Auditable** — traceable identifiers and evidence references
-- **Side-effect bounded** — explicit declaration of intended effects
+Policy- and risk-aware
 
-### Side Effect
+Jurisdictionally scoped
 
-A **Side Effect** is any externalized change including, but not limited to:
-- Network calls (HTTP requests, webhooks)
-- Writes (databases, filesystems, object storage)
-- Outbound messages (email, SMS, push notifications)
-- Payments, account changes, or entitlement changes
-- Device actuation or control signals
-- External tool or service invocation of any kind
+Auditable
 
----
+Action Intents are evaluated in Phase 1 only.
 
-## API Overview
+Execution Payload (Runtime Phase)
 
-Solace Core exposes a single conceptual operation:
+An exact, concrete description of what would be executed if authorized.
 
-> **Evaluate(ActionIntent) → Decision**
+Characteristics:
 
----
+Deterministic
 
-## Decision Outcomes
+Hashable
 
-### `PERMIT`
+Side-effect bearing
 
-Execution is allowed **exactly as described** by the evaluated Action Intent.
+Authority-bound
 
-- Integrator may proceed with the declared side effects within scope.
-- Integrator must record the Permit decision as part of the execution audit trail.
-- Permits are **intent-scoped** and do not confer blanket authorization.
+Execution payloads are enforced in Phase 2 only.
 
-### `DENY`
+Side Effect
 
-Execution is not allowed.
+Any externalized change, including but not limited to:
 
-- Integrator must not perform any side effect associated with the intent.
-- Integrator may surface the denial to a user or operator.
-- Integrator may submit a modified intent for reevaluation.
+Network calls
 
-### `ESCALATE`
+Database writes
 
-Execution is not allowed until explicit external authorization occurs.
+File or object storage writes
 
-- Integrator must pause automation and route to an authority workflow (human approver, policy custodian, or designated arbiter).
-- Integrator may not auto-resolve escalation through retries, rephrasing, or optimization.
-- After authorization, a new Action Intent must be submitted referencing the authorization artifact.
+Messaging or notifications
 
----
+Payments or entitlement changes
 
-## Required Integrator Behavior
+Device or infrastructure control
 
-### Fail-Closed Execution Gate (Mandatory)
+External tool invocation
 
-Integrators must implement a hard execution gate:
+If a side effect can occur, Solace Core must gate it.
 
-- **Default state:** deny execution
-- **Only override:** an explicit `PERMIT` response for the specific Action Intent
-- **On timeout, error, or unreachable:** treat as `DENY` (fail closed)
+Required Integrator Behavior (Mandatory)
+Fail-Closed Execution Gate
 
-### No Side Effects Before Permit (Mandatory)
+Integrators must implement a hard gate:
 
-Before a Permit is issued, integrations may only perform:
-- Local computation
-- Planning or reasoning
-- Formatting or validation
-- Dry-run simulation
-- Rendering UI for review
+Default state: deny execution
 
-Integrations may **not** perform:
-- Calls to external services that mutate state
-- Writes to durable or shared stores
-- Tool execution that could trigger side effects
-- Pre-authorization effects disguised as checks or probes
+Only override: explicit runtime PERMIT
 
-### Explicit Intent Binding (Mandatory)
+On error, timeout, or ambiguity: treat as DENY
 
-A Permit must be bound to:
-- The exact action name
-- The exact target or targets
-- The material parameters
-- A traceable request identifier
+No Side Effects Before Permit
 
-Any material change requires a new evaluation.
+Before a runtime PERMIT, integrations may perform only:
 
-### Non-Bypassable Wiring (Mandatory)
+Local computation
+
+Planning or reasoning
+
+Formatting or validation
+
+Dry-run simulation
+
+UI rendering
+
+Integrations must not perform:
+
+State mutation
+
+External service calls
+
+Writes to durable stores
+
+Tool calls with side effects
+
+“Pre-checks” that mutate state
+
+Non-Bypassable Wiring
 
 Solace Core must sit in the critical execution path.
 
-If execution can proceed without a Permit:
-- Governance is invalid
-- The system is out of compliance with this contract
+If execution can occur without Solace Core approval:
 
----
+Governance is invalid
 
-## Request Contract (Schema)
+The system is out of compliance with this contract
 
-Solace Core is transport-agnostic. Integrations may use HTTP, RPC, message buses, or embedded gateways. The contract below defines the **minimum required fields** for an evaluation request.
+Summary Invariant
 
-### `ActionIntent` (minimum required shape)
-
-```json
-{
-  "intent_id": "string",
-  "timestamp": "ISO-8601 string",
-  "actor": {
-    "type": "human|service|agent",
-    "id": "string",
-    "display": "string (optional)"
-  },
-  "system": {
-    "name": "string",
-    "version": "string",
-    "environment": "prod|staging|dev|other"
-  },
-  "action": {
-    "name": "string",
-    "category": "read|write|notify|payment|admin|other",
-    "side_effects": ["string"]
-  },
-  "targets": [
-    {
-      "type": "string",
-      "id": "string",
-      "attributes": { "any": "json" }
-    }
-  ],
-  "parameters": { "any": "json" },
-  "context": {
-    "policy_mode": "string",
-    "risk_tier": "low|medium|high|unknown",
-    "jurisdiction": ["string"],
-    "purpose": "string (optional)"
-  },
-  "evidence": [
-    {
-      "type": "string",
-      "ref": "string",
-      "hash": "string (optional)"
-    }
-  ]
-}
+Governance may decide what is allowed.
+Solace Core decides what actually happens.
+Nothing executes without a runtime Permit.

@@ -1,101 +1,120 @@
 # Solace Core Threat Model
 
-This document describes the threats Solace Core mitigates and the threats that remain out of scope.
+This document describes the threats **Solace Core mitigates** and those that are **explicitly out of scope**.
 
-Solace Core is an **authority decision point** (PDP) that governs execution by emitting PERMIT / DENY / ESCALATE.
+Solace Core is a **runtime execution authority enforcement point** that verifies whether execution of an action is permitted.
+It emits binding **PERMIT** or **DENY** outcomes based on cryptographic and structural authority checks.
+
+Governance decisions such as **ESCALATE** occur in upstream governance systems and must be resolved before execution authority is issued.
 
 ---
 
 ## Trust Boundaries
 
 ### In scope
-- Solace Core service/runtime
-- Policy packs and invariant set
-- Attestation endpoint (versions/hashes)
-- Decision issuance and logging
+- Solace Core runtime service
+- Execution authority verification logic
+- Acceptance validation and binding
+- Decision issuance (PERMIT / DENY)
+- Decision logging and audit chaining
+- Attestation endpoint (runtime, invariant, and boundary hashes)
 
 ### Out of scope (by design)
-- Model weights, prompts, token generation
-- Tool execution engines
-- External data stores (except log storage if you operate it)
-- Customer internal authorization systems (unless integrated)
+- Model weights, prompts, or inference behavior
+- Natural language reasoning or interpretation
+- Tool execution engines and side-effecting runtimes
+- External data stores (except Solace-managed logs, if applicable)
+- Customer internal authorization systems (unless explicitly integrated)
+- Client-side executor enforcement
 
 ---
 
 ## Primary Threats Mitigated
 
-### 1) Bypass of governance controls
-**Threat:** Client executes actions without calling Solace, or ignores DENY/ESCALATE.  
-**Mitigation:** Architectural requirement + contractual binding + verifiable decision logs/attestation.  
-**Residual:** Solace cannot force client enforcement unless paired with integration verification or control-plane embedding.
+### 1) Bypass of execution authority
+**Threat:** A system executes side effects without valid runtime authority.  
+**Mitigation:** Solace Core enforces a fail-closed execution gate and emits verifiable PERMIT/DENY decisions with audit evidence.  
+**Residual:** Solace Core cannot prevent bypass if the customer’s execution environment ignores or circumvents the control plane.
+
+---
 
 ### 2) Silent escalation avoidance
-**Threat:** System “soft-fails” escalation and proceeds anyway.  
-**Mitigation:** ESCALATE is a hard stop semantics; recommended integration patterns enforce gating.  
-**Residual:** Same as above—client-side enforcement must be real.
+**Threat:** A system receives an escalation requirement upstream and proceeds without resolving it.  
+**Mitigation:** Solace Core requires a valid execution acceptance; without it, execution is denied.  
+**Residual:** Upstream governance resolution must be enforced by the customer before acceptance issuance.
 
-### 3) Evidence forgery (human approvals, consent)
-**Threat:** Fake approvals or replayed approvals.  
-**Mitigation:** Evidence hash pointers + optional cryptographic proof (JWT/JWS/COSE) + expiry windows + idempotency.  
-**Residual:** If customers choose opaque proofs or weak signing, quality degrades.
+---
 
-### 4) Decision tampering and repudiation
-**Threat:** Parties dispute what policy/invariants applied at the time.  
-**Mitigation:** Decision payload includes policy_version and invariant_version; attestation returns hashes.  
-**Residual:** Requires secure storage and access controls on logs.
+### 3) Evidence forgery or replay
+**Threat:** Forged or replayed approvals (human consent, external authority).  
+**Mitigation:** Evidence references are hashed, time-bound, and optionally cryptographically verifiable (JWT/JWS/COSE). Acceptance artifacts bind evidence implicitly via issuance.  
+**Residual:** If customers accept weak or opaque evidence formats, assurance is reduced.
+
+---
+
+### 4) Decision tampering or repudiation
+**Threat:** Disputes over which rules or invariants applied at execution time.  
+**Mitigation:** Decisions include invariant and boundary versions; attestation endpoints expose hashes for reconstruction.  
+**Residual:** Requires secure log storage and access controls in the customer environment.
+
+---
 
 ### 5) Replay and race conditions
-**Threat:** Duplicate requests produce inconsistent decisions or double execution.  
-**Mitigation:** request_id idempotency; decision_id-bound /ack flow; expiry.  
-**Residual:** Customers must implement idempotent execution downstream as well.
+**Threat:** Duplicate or replayed execution requests cause double execution.  
+**Mitigation:** Acceptance artifacts are time-bound and execution-bound; Solace Core enforces validity windows.  
+**Residual:** Customers must implement idempotent execution downstream to fully prevent double effects.
 
-### 6) Policy drift / untracked changes
-**Threat:** Policy changes silently alter runtime behavior.  
-**Mitigation:** Versioned policy packs + sha256 + attestation + immutable version discipline.  
-**Residual:** Operational processes must prevent “hot edits.”
+---
+
+### 6) Undetected policy or invariant drift
+**Threat:** Runtime behavior changes due to silent policy or invariant updates.  
+**Mitigation:** Versioned invariants and boundary declarations with cryptographic hashes exposed via attestation.  
+**Residual:** Operational discipline is required to prevent unauthorized changes.
 
 ---
 
 ## Threats Explicitly Not Mitigated
 
-### A) Model jailbreaks / prompt injection
-Solace does not inspect prompts or completions. Mitigation must occur in:
-- intent construction
-- tool/runtime sandboxes
-- input/output filtering in the client system
+### A) Model jailbreaks or prompt injection
+Solace Core does not inspect prompts, model outputs, or intermediate reasoning.
 
-### B) Incorrect model outputs (hallucinations)
-Solace governs execution, not truthfulness of language.
+### B) Incorrect or hallucinated model outputs
+Solace Core governs execution authority, not correctness or truthfulness.
 
-### C) Data poisoning / training compromise
+### C) Training data poisoning or model compromise
 Out of scope.
 
-### D) Customer infra compromise
-If attacker owns the customer’s executor, they can bypass any guard not embedded at the control plane.
+### D) Customer infrastructure compromise
+If an attacker controls the customer’s execution environment, Solace Core cannot prevent local bypass.
 
 ---
 
 ## Recommended Compensating Controls (Customer Side)
 
-- Executor-level enforcement gate: “no side effects unless decision == PERMIT”
-- Immutable append-only logs in customer environment
-- Human approval workflows issuing signed proofs
-- Tool sandboxing and least-privilege capabilities
-- Monitoring:
+- Executor-level hard gate: no side effects unless decision == PERMIT
+- Capability isolation and least-privilege execution
+- Immutable, append-only execution logs
+- Signed human or external authority workflows
+- Monitoring and alerting for:
   - spikes in DENY
   - repeated escalation loops
-  - unusual intent patterns
+  - anomalous intent or execution patterns
 
 ---
 
 ## Security Posture Summary
 
-Solace is best understood as:
-- **Control-plane authority**
-- **Evidence generation**
+Solace Core functions as:
+
+- **Control-plane execution authority**
+- **Cryptographic enforcement boundary**
+- **Evidence and audit anchor**
 - **Fail-closed runtime guard**
 
-It is not:
-- a content safety filter
+Solace Core is **not**:
+
+- a content moderation system
 - an inference auditor
 - a complete security boundary by itself
+
+Security requires correct integration at the execution layer.
