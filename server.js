@@ -39,7 +39,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!SUPABASE_URL) throw new Error("supabase_url_missing");
-if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error("supabase_service_role_key_missing");
+if (!SUPABASE_SERVICE_ROLE_KEY)
+  throw new Error("supabase_service_role_key_missing");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -170,7 +171,7 @@ function verifyAcceptanceSignature(acceptance, executeHash) {
 
 /**
  * ------------------------------------------------------------
- * Ledger write (Supabase) — FAIL CLOSED for /v1/execute
+ * Ledger write (Supabase)
  * ------------------------------------------------------------
  * NOTE: prev_hash + entry_hash are computed in the DB trigger you said is done.
  * Core supplies only the decision facts + binding hashes.
@@ -209,69 +210,78 @@ async function ledgerWrite({
  * ------------------------------------------------------------
  * POST /v1/authorize
  * Non-executing authority inquiry
- * IMPORTANT: advisory surface; does not mint execution authority.
+ * IMPORTANT:
+ * - advisory surface; does not mint execution authority
+ * - MUST WRITE DENY/ESCALATE decisions to ledger for insurer evidence
+ * - MUST NOT fail-closed on ledger failure (authorize is advisory)
  * ------------------------------------------------------------
  */
 app.post("/v1/authorize", async (req, res) => {
+  const intentObj = req.body;
+
+  // Decide deterministically first
+  let decision = "DENY";
+  let reason = "no_acceptance_issued";
+
+  const actorId =
+    (intentObj && intentObj.actor && intentObj.actor.id && String(intentObj.actor.id)) ||
+    "unknown";
+
+  const intentName =
+    (intentObj && typeof intentObj.intent === "string" && intentObj.intent) ||
+    "unknown_intent";
+
   try {
-    const intent = req.body;
-
-    if (!intent || !intent.intent || !intent.actor?.id) {
-      return res.status(200).json({
-        decision: "DENY",
-        reason: "invalid_authorize_request",
-      });
-    }
-
-    // Advisory-only: keep your demo rule intact
-    if (
-      intent.intent === "generate_court_filing_language" &&
-      typeof intent.context?.deadline_minutes === "number" &&
-      intent.context.deadline_minutes <= 30
+    if (!intentObj || !intentObj.intent || !intentObj.actor?.id) {
+      decision = "DENY";
+      reason = "invalid_authorize_request";
+    } else if (
+      intentObj.intent === "generate_court_filing_language" &&
+      typeof intentObj.context?.deadline_minutes === "number" &&
+      intentObj.context.deadline_minutes <= 30
     ) {
-      // Optional: write advisory decisions too (not required for insurer proof of execution gating)
-      // If you prefer not to log authorize decisions, delete this block.
-      try {
-        await ledgerWrite({
-          actor_id: String(intent.actor.id),
-          intent: String(intent.intent),
-          intent_hash: computeIntentHash(intent),
-          execute_hash: null,
-          acceptance_hash: null,
-          decision: "ESCALATE",
-          reason: "high_liability_time_constrained_action_requires_external_acceptance",
-        });
-      } catch {
-        // DO NOT fail closed on authorize: it is advisory.
-        // Execution gate is /v1/execute.
-      }
-
-      return res.status(200).json({
-        decision: "ESCALATE",
-        reason: "high_liability_time_constrained_action_requires_external_acceptance",
-      });
+      decision = "ESCALATE";
+      reason = "high_liability_time_constrained_action_requires_external_acceptance";
+    } else {
+      decision = "DENY";
+      reason = "no_acceptance_issued";
     }
 
+    // Always attempt to write evidence for authorize decisions
+    // (best-effort; DO NOT block authorize response)
     try {
       await ledgerWrite({
-        actor_id: String(intent.actor.id),
-        intent: String(intent.intent),
-        intent_hash: computeIntentHash(intent),
+        actor_id: actorId,
+        intent: intentName,
+        intent_hash: computeIntentHash(intentObj),
+        execute_hash: null,
+        acceptance_hash: null,
+        decision,
+        reason,
+      });
+    } catch (e) {
+      console.error("[LEDGER][AUTHORIZE] write failed:", String(e?.message || e));
+    }
+
+    return res.status(200).json({ decision, reason });
+  } catch (err) {
+    const msg = err?.message ?? "unknown_error";
+
+    // Try to record the error event as a DENY (best-effort)
+    try {
+      await ledgerWrite({
+        actor_id: actorId,
+        intent: intentName,
+        intent_hash: computeIntentHash(intentObj),
         execute_hash: null,
         acceptance_hash: null,
         decision: "DENY",
-        reason: "no_acceptance_issued",
+        reason: "authorization_gate_error",
       });
-    } catch {
-      // advisory surface: do not block
+    } catch (e) {
+      console.error("[LEDGER][AUTHORIZE][ERROR] write failed:", String(e?.message || e));
     }
 
-    return res.status(200).json({
-      decision: "DENY",
-      reason: "no_acceptance_issued",
-    });
-  } catch (err) {
-    const msg = err?.message ?? "unknown_error";
     return res.status(500).json({
       decision: "DENY",
       reason: "authorization_gate_error",
@@ -344,7 +354,6 @@ app.post("/v1/execute", async (req, res) => {
     // Time window check
     const now = new Date();
     if (now < new Date(issuedAt) || now > new Date(expiresAt)) {
-      // Log and deny
       try {
         await ledgerWrite({
           actor_id: actorId,
@@ -355,9 +364,7 @@ app.post("/v1/execute", async (req, res) => {
           decision: "DENY",
           reason: "acceptance_not_in_valid_time_window",
         });
-      } catch {
-        // deny anyway
-      }
+      } catch {}
 
       return res.status(200).json({
         decision: "DENY",
@@ -437,7 +444,6 @@ app.post("/v1/execute", async (req, res) => {
         reason: "valid_acceptance_signature",
       });
     } catch (e) {
-      // This is the insurer-critical posture: no evidence => no permit.
       return res.status(200).json({
         decision: "DENY",
         reason: "ledger_write_failed",
@@ -445,7 +451,6 @@ app.post("/v1/execute", async (req, res) => {
       });
     }
 
-    // Return permit outcome (Core is headless; caller executes side effects)
     return res.status(200).json({
       decision: "PERMIT",
       executeHash,
@@ -456,7 +461,6 @@ app.post("/v1/execute", async (req, res) => {
     });
   } catch (err) {
     const msg = err?.message ?? "unknown_error";
-    // FAIL CLOSED on unexpected errors in execute path
     return res.status(500).json({
       decision: "DENY",
       reason: "execution_gate_error",
@@ -472,5 +476,5 @@ app.post("/v1/execute", async (req, res) => {
  */
 const PORT = process.env.PORT || 8787;
 app.listen(PORT, () => {
-  console.log(`Solace Core Authority listening on :${PORT}`);
+  console.log("Legacy server listening...");
 });
