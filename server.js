@@ -1,6 +1,8 @@
 // server.js
-// Solace Core Authority — Acceptance-Only (Model B)
-// Verifies externally issued acceptance, binds to execution, fail-closed.
+// Solace Core Authority — Dual-Surface
+// - /v1/authorize : non-executing authority evaluation (Model A-lite)
+// - /v1/execute   : acceptance-only execution gate (Model B)
+// FAIL-CLOSED. EXTERNAL AUTHORITY. CRYPTOGRAPHIC BINDING.
 
 import express from "express";
 import fs from "fs";
@@ -13,15 +15,15 @@ const app = express();
 
 /**
  * ------------------------------------------------------------
- * Health check (MUST be before body parsing)
+ * Health check
  * ------------------------------------------------------------
  */
 app.get("/health", (_req, res) => {
   return res.status(200).json({
     status: "ok",
     service: "solace-core-authority",
-    mode: "acceptance-only",
-    time: new Date().toISOString()
+    mode: "dual-surface",
+    time: new Date().toISOString(),
   });
 });
 
@@ -42,7 +44,7 @@ app.use((err, _req, res, next) => {
     return res.status(400).json({
       decision: "DENY",
       reason: "invalid_json",
-      message: err.message
+      message: err.message,
     });
   }
   next(err);
@@ -51,7 +53,6 @@ app.use((err, _req, res, next) => {
 /**
  * ------------------------------------------------------------
  * Audit log (append-only, hash-chained)
- * NOTE: On Vercel this is ephemeral. Authority remains valid.
  * ------------------------------------------------------------
  */
 const LOG_DIR = path.join(process.cwd(), "logs");
@@ -92,7 +93,7 @@ function appendAudit(event, payload) {
     ts: new Date().toISOString(),
     event,
     payload,
-    prevHash: LAST_AUDIT_HASH
+    prevHash: LAST_AUDIT_HASH,
   };
 
   const hash = sha256Hex(JSON.stringify(entry));
@@ -136,7 +137,7 @@ function verifyAcceptanceSignature(acceptance, executeHash) {
     intent,
     issuedAt,
     expiresAt,
-    signature
+    signature,
   } = acceptance;
 
   const material = canonical({
@@ -145,7 +146,7 @@ function verifyAcceptanceSignature(acceptance, executeHash) {
     intent,
     executeHash,
     issuedAt,
-    expiresAt
+    expiresAt,
   });
 
   const verifier = crypto.createVerify("SHA256");
@@ -156,14 +157,72 @@ function verifyAcceptanceSignature(acceptance, executeHash) {
 
 /**
  * ------------------------------------------------------------
+ * POST /v1/authorize
+ * Non-executing authority inquiry
+ * ------------------------------------------------------------
+ */
+app.post("/v1/authorize", (req, res) => {
+  try {
+    const intent = req.body;
+
+    if (!intent || !intent.intent || !intent.actor?.id) {
+      return res.status(200).json({
+        decision: "DENY",
+        reason: "invalid_authorize_request",
+      });
+    }
+
+    // Hard demo rule: high-liability + time pressure
+    if (
+      intent.intent === "generate_court_filing_language" &&
+      intent.context?.deadline_minutes <= 30
+    ) {
+      appendAudit("authorize_escalated", {
+        actorId: intent.actor.id,
+        intent: intent.intent,
+        reason: "high_liability_time_constrained_action",
+      });
+
+      return res.status(200).json({
+        decision: "ESCALATE",
+        reason:
+          "high_liability_time_constrained_action_requires_external_acceptance",
+      });
+    }
+
+    appendAudit("authorize_denied", {
+      actorId: intent.actor.id,
+      intent: intent.intent,
+      reason: "no_acceptance_issued",
+    });
+
+    return res.status(200).json({
+      decision: "DENY",
+      reason: "no_acceptance_issued",
+    });
+  } catch (err) {
+    const msg = err?.message ?? "unknown_error";
+    try {
+      appendAudit("authorize_error", { error: msg });
+    } catch {}
+    return res.status(500).json({
+      decision: "DENY",
+      reason: "authorization_gate_error",
+      error: msg,
+    });
+  }
+});
+
+/**
+ * ------------------------------------------------------------
  * POST /v1/execute
+ * Acceptance-only execution gate
  * ------------------------------------------------------------
  */
 app.post("/v1/execute", (req, res) => {
   try {
     const { intent, execute, acceptance } = req.body || {};
 
-    // --- Structural guards ---
     if (
       !intent ||
       !intent.actor?.id ||
@@ -173,7 +232,7 @@ app.post("/v1/execute", (req, res) => {
     ) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "invalid_or_missing_execute_request"
+        reason: "invalid_or_missing_execute_request",
       });
     }
 
@@ -183,7 +242,7 @@ app.post("/v1/execute", (req, res) => {
       intent: acceptedIntent,
       issuedAt,
       expiresAt,
-      signature
+      signature,
     } = acceptance;
 
     if (
@@ -196,79 +255,18 @@ app.post("/v1/execute", (req, res) => {
     ) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "invalid_or_missing_acceptance"
+        reason: "invalid_or_missing_acceptance",
       });
     }
 
-    // --- Temporal validity ---
     const now = new Date();
     if (now < new Date(issuedAt) || now > new Date(expiresAt)) {
       return res.status(200).json({
         decision: "DENY",
-        reason: "acceptance_not_in_valid_time_window"
+        reason: "acceptance_not_in_valid_time_window",
       });
     }
 
-    // --- Actor binding ---
     if (actorId !== intent.actor.id) {
       return res.status(200).json({
-        decision: "DENY",
-        reason: "actor_binding_mismatch"
-      });
-    }
-
-    // --- Intent binding ---
-    if (acceptedIntent !== intent.intent) {
-      return res.status(200).json({
-        decision: "DENY",
-        reason: "intent_binding_mismatch"
-      });
-    }
-
-    // --- Execution binding ---
-    const executeHash = computeExecuteHash(execute);
-    const sigValid = verifyAcceptanceSignature(acceptance, executeHash);
-
-    if (!sigValid) {
-      return res.status(200).json({
-        decision: "DENY",
-        reason: "invalid_acceptance_signature"
-      });
-    }
-
-    appendAudit("execute_permitted", {
-      actorId,
-      intent: intent.intent,
-      execute,
-      issuer
-    });
-
-    return res.status(200).json({
-      decision: "PERMIT",
-      actorId,
-      intent: intent.intent,
-      executeHash,
-      issuer,
-      consumedAt: new Date().toISOString()
-    });
-  } catch (err) {
-    const msg = err?.message ?? "unknown_error";
-    try {
-      appendAudit("execute_error", { error: msg });
-    } catch {}
-    return res.status(500).json({
-      decision: "DENY",
-      reason: "execution_gate_error",
-      error: msg
-    });
-  }
-});
-
-/**
- * ------------------------------------------------------------
- * VERCEL EXPORT (NO app.listen)
- * ------------------------------------------------------------
- * Vercel runs this as a serverless handler.
- * This makes the service LIVE and EXTERNAL.
- */
-export default app;
+        de
