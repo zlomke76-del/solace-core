@@ -2,7 +2,7 @@
   "intent": {
     "actor": { "id": "actor:test-role-1" },
     "intent": "TEST_ACTION",
-    "context": { "risk": "low" }
+    "context": { "risk": "Low" }
   },
   "execute": {
     "action": "TEST_ACTION",
@@ -11,10 +11,14 @@
   "acceptance": {
     "issuer": "human-board-1",
     "actorId": "actor:test-role-1",
-    "intent": "TEST_ACTION",
-    "executeHash": "ddaebf7c87571bc510d30d5af15694804155ac08c9d2e6fdff77b3d85235f8c1",
-    "issuedAt": "2026-02-10T00:09:56.769Z",
-    "expiresAt": "2026-02-10T01:09:56.770Z",
-    "signature": "BASE64_SIGNATURE_STRING"
+    "intent": {
+      "actor": { "id": "actor:test-role-1" },
+      "intent": "TEST_ACTION",
+      "context": { "risk": "Low" }
+    },
+    "executeHash": "dd0aef7c87571bc510d30d5af15694804155ac08c9d2e6fdff77b3d85235f8c1",
+    "issuedAt": "2026-02-10T00:40:00.865Z",
+    "expiresAt": "2026-02-10T01:40:00.865Z",
+    "signature": "QT/L91HVQn5MYrs6LJ16CELcAUUKU1JpFmB6ViJEDh+5HYW2yB0vEM6wHSZkoWphVhNjFZ/9oyp4WwKUAewX5tC4Gd+o3A1jUcZ+0b5V2hoeqLGZBB0yT7ttNJ6/Wph7F0eyKsroS0rJMuxQrf64HfAbuYzODZH4TDdhg+KBoLqFRTQzq/kbqZNa8SG2NPMKgnuHhwFhdGN7p7AgMFXJRDchXQsA0aj3CsYPGGfX4beS9ZEYn0uWDhghyCcvqvfLR13MA0A7TH4ZNepJzGhoMwSND8gXZcg7ANguloz+4D99p0ET5c6dPRUmVhVrn0LsG/dazMZ/ITFCBimIA=="
   }
 }
