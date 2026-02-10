@@ -51,6 +51,7 @@ app.use((err, _req, res, next) => {
 /**
  * ------------------------------------------------------------
  * Audit log (append-only, hash-chained)
+ * NOTE: On Vercel this is ephemeral. Authority remains valid.
  * ------------------------------------------------------------
  */
 const LOG_DIR = path.join(process.cwd(), "logs");
@@ -265,11 +266,9 @@ app.post("/v1/execute", (req, res) => {
 
 /**
  * ------------------------------------------------------------
- * Start server
+ * VERCEL EXPORT (NO app.listen)
  * ------------------------------------------------------------
+ * Vercel runs this as a serverless handler.
+ * This makes the service LIVE and EXTERNAL.
  */
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`Solace Core Authority listening on http://localhost:${PORT}`);
-  console.log("Mode: acceptance-only (external authority required)");
-});
+export default app;
