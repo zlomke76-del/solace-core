@@ -1,18 +1,12 @@
 {
   "intent": {
     "actor": { "id": "actor:test-role-1" },
-    "intent": "TEST_ACTION"
+    "intent": "TEST_ACTION",
+    "context": { "risk": "low" }
   },
   "execute": {
-    "op": "noop",
+    "action": "TEST_ACTION",
     "target": "sandbox"
   },
-  "acceptance": {
-    "issuer": "human-board-1",
-    "actorId": "actor:test-role-1",
-    "intent": "TEST_ACTION",
-    "issuedAt": "2026-02-09T23:47:40.927Z",
-    "expiresAt": "2026-02-10T00:47:40.927Z",
-    "signature": "PASTE_SIGNATURE_FROM_acceptance.json"
-  }
+  "acceptance": { /* FULL acceptance.json pasted here */ }
 }
