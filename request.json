@@ -1,32 +1,11 @@
 {
   "intent": {
-    "actor": {
-      "id": "actor:test-role-1"
-    },
+    "actor": { "id": "actor:test-role-1" },
     "intent": "TEST_ACTION",
-    "context": {
-      "risk": "low"
-    }
+    "context": { "risk": "low" }
   },
   "execute": {
     "action": "TEST_ACTION",
     "target": "sandbox"
-  },
-  "acceptance": {
-    "issuer": "human-board-1",
-    "actorId": "actor:test-role-1",
-    "intent": {
-      "actor": {
-        "id": "actor:test-role-1"
-      },
-      "intent": "TEST_ACTION",
-      "context": {
-        "risk": "low"
-      }
-    },
-    "executeHash": "ddaebf7c87571bc510d30d5af15694804155ac08c9d2e6fdff77b3d85235f8c1",
-    "issuedAt": "2026-02-10T00:45:08.293Z",
-    "expiresAt": "2026-02-10T01:45:08.293Z",
-    "signature": "Al7d1sH9I29l4WZ1W82kEIQRUI0oY4cKSJgOQi16kD9tR7uaqG6fwkuj46cDg46KEuaexkX5OUQeWHxor7MleUNsTEOqXaPFgjDBxBV4eWXq2b66/X+wOhDYKHBypNvPMFhgdgRiZ8v8DTOEEwYknYII9KCkVPGwcjcIdomFDgLrn6l23A/mFQ9jxHyeLNZVutMX2F7EnfJ3Gg9GFYxdqlBBqhwm7MB4RaKE/NqzQtQ6/lEV4mzrXKThqgMoGA8GV8thEZ3hXSEoyRAze1sLz78jDy2KlPmCAa1F0sxdBwSfJNaUSFkQ3d/7ffGa8q3mvyBpocB9+k3iOrvBG6IeCw=="
   }
 }
