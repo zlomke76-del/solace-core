@@ -201,4 +201,3 @@ export function _debugAcceptancePayload(actorId, intent, issuedAt, expiresAt) {
   });
   return { generatedAt: nowIso(), payload, expected };
 }
-
