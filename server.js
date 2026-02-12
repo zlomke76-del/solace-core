@@ -32,6 +32,18 @@ const CORE_ENV =
 
 /**
  * ------------------------------------------------------------
+ * Authority key identity (optional, audit-grade)
+ * ------------------------------------------------------------
+ * This is NOT used for signature verification yet.
+ * It is written to the ledger for traceability / rotation readiness.
+ */
+const AUTHORITY_KEY_ID =
+  (process.env.SOLACE_AUTHORITY_KEY_ID &&
+    String(process.env.SOLACE_AUTHORITY_KEY_ID)) ||
+  null;
+
+/**
+ * ------------------------------------------------------------
  * Supabase (service role) — append-only authority ledger
  * ------------------------------------------------------------
  */
@@ -59,6 +71,7 @@ app.get("/health", (_req, res) => {
     time: new Date().toISOString(),
     coreVersion: CORE_VERSION,
     environment: CORE_ENV,
+    authorityKeyId: AUTHORITY_KEY_ID || null,
   });
 });
 
@@ -173,7 +186,7 @@ function verifyAcceptanceSignature(acceptance, executeHash) {
  * ------------------------------------------------------------
  * Ledger write (Supabase)
  * ------------------------------------------------------------
- * NOTE: prev_hash + entry_hash are computed in the DB trigger you said is done.
+ * NOTE: prev_hash + entry_hash are computed in the DB trigger.
  * Core supplies only the decision facts + binding hashes.
  */
 async function ledgerWrite({
@@ -195,6 +208,7 @@ async function ledgerWrite({
     reason,
     core_version: CORE_VERSION,
     environment: CORE_ENV,
+    authority_key_id: AUTHORITY_KEY_ID || null,
   };
 
   const { error } = await supabase.from("solace_authority_ledger").insert(row);
@@ -282,7 +296,10 @@ app.post("/v1/authorize", async (req, res) => {
         reason: "authorization_gate_error",
       });
     } catch (e) {
-      console.error("[LEDGER][AUTHORIZE][ERROR] write failed:", String(e?.message || e));
+      console.error(
+        "[LEDGER][AUTHORIZE][ERROR] write failed:",
+        String(e?.message || e)
+      );
     }
 
     return res.status(500).json({
@@ -449,7 +466,7 @@ app.post("/v1/execute", async (req, res) => {
     } catch (e) {
       const msg = String(e?.message || "ledger_write_failed");
 
-      // If the DB enforces single-use acceptances via unique index:
+      // Replay resistance: DB enforces unique acceptance_hash via:
       // solace_ledger_acceptance_hash_uniq on (acceptance_hash) WHERE acceptance_hash IS NOT NULL
       if (msg.includes("solace_ledger_acceptance_hash_uniq")) {
         return res.status(200).json({
