@@ -16,8 +16,27 @@ function sha256(data) {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
+// Stable canonicalization (recursive, matches Core)
+function stableSort(value) {
+  if (value === null || value === undefined) return value;
+
+  if (Array.isArray(value)) {
+    return value.map(stableSort);
+  }
+
+  if (typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value).sort()) {
+      out[k] = stableSort(value[k]);
+    }
+    return out;
+  }
+
+  return value;
+}
+
 function canonical(obj) {
-  return JSON.stringify(obj, Object.keys(obj).sort());
+  return JSON.stringify(stableSort(obj));
 }
 
 // ------------------------------------------------------------
@@ -28,10 +47,13 @@ const privateKey = fs.readFileSync(KEY_PATH, "utf8");
 // ------------------------------------------------------------
 // CLI input
 // ------------------------------------------------------------
-const [, , intentPath, executePath, actorId] = process.argv;
+// Usage:
+//   issue <intent.json> <execute.json> <actorId> [authorityKeyId]
+//
+const [, , intentPath, executePath, actorId, authorityKeyId] = process.argv;
 
 if (!intentPath || !executePath || !actorId) {
-  console.error("Usage: issue <intent.json> <execute.json> <actorId>");
+  console.error("Usage: issue <intent.json> <execute.json> <actorId> [authorityKeyId]");
   process.exit(1);
 }
 
@@ -65,14 +87,21 @@ const expiresAt = new Date(Date.now() + TTL_MINUTES * 60_000).toISOString();
 // ------------------------------------------------------------
 // Canonical material to sign
 // ------------------------------------------------------------
-const material = canonical({
+const materialPayload = {
   issuer: ISSUER_ID,
   actorId,
   intent,
   executeHash,
   issuedAt,
   expiresAt
-});
+};
+
+// If registry-backed, bind key ID into signed material
+if (authorityKeyId) {
+  materialPayload.authorityKeyId = authorityKeyId;
+}
+
+const material = canonical(materialPayload);
 
 // ------------------------------------------------------------
 // Sign
@@ -94,5 +123,9 @@ const acceptance = {
   expiresAt,
   signature
 };
+
+if (authorityKeyId) {
+  acceptance.authorityKeyId = authorityKeyId;
+}
 
 console.log(JSON.stringify(acceptance, null, 2));
