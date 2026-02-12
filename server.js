@@ -216,16 +216,33 @@ async function fetchAuthorityKeyById(authorityKeyId) {
  * Acceptance signs canonical material including executeHash.
  */
 function verifyAcceptanceSignatureWithKey(acceptance, executeHash, publicKeyPem) {
-  const { issuer, actorId, intent, issuedAt, expiresAt, signature } = acceptance;
+  const {
+    issuer,
+    actorId,
+    intent,
+    issuedAt,
+    expiresAt,
+    signature,
+    authorityKeyId,
+    authority_key_id,
+  } = acceptance;
 
-  const material = canonical({
+  const materialObj = {
     issuer,
     actorId,
     intent,
     executeHash,
     issuedAt,
     expiresAt,
-  });
+  };
+
+  // If authority key id is provided, it must be bound into the signature
+  const keyId = asUuidString(authorityKeyId) || asUuidString(authority_key_id);
+  if (keyId) {
+    materialObj.authorityKeyId = keyId;
+  }
+
+  const material = canonical(materialObj);
 
   const verifier = crypto.createVerify("SHA256");
   verifier.update(material);
@@ -233,6 +250,7 @@ function verifyAcceptanceSignatureWithKey(acceptance, executeHash, publicKeyPem)
 
   return verifier.verify(publicKeyPem, signature, "base64");
 }
+
 
 /**
  * ------------------------------------------------------------
